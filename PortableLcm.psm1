@@ -338,17 +338,11 @@ function Get-MofResource
         $Resource
     )
 
-    $functionName = 'Get-TargetResource'
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
 
     try
     {
-        $tempFunctionName = $functionName.Replace("-", "-$($Resource.Name)")
-        $dscResource = (Get-DscResource -Module $Resource.ModuleName -Name $resource.Name -Verbose:$false).Where({$_.Version -eq $Resource.ModuleVersion}) | Select-Object -First 1
-        if(-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
-        {
-            Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $Resource.Name -Verbose:$false
-        }
+        $tempFunctionName = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Get'
 
         if(Test-ParameterValidation -Name $tempFunctionName -Values $Resource.Property)
         {
@@ -356,7 +350,7 @@ function Get-MofResource
             $splatProperties = Get-ValidParameter -Name $tempFunctionName -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Get',$Resource.Name)
 
-            $get = & "Get-$($Resource.Name)TargetResource" @splatProperties
+            $get = & "$tempFunctionName" @splatProperties
             $cimGetResults = New-Object -TypeName 'System.Collections.ObjectModel.Collection`1[Microsoft.Management.Infrastructure.CimInstance]'
             foreach ($row in $get.Keys.GetEnumerator())
             {
@@ -411,18 +405,11 @@ function Test-MofResource
         $Resource
     )
 
-    $functionName = 'Test-TargetResource'
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
 
     try
     {
-        $tempFunctionName = $functionName.Replace("-", "-$($Resource.Name)")
-        $dscResource = (Get-DscResource -Module $Resource.ModuleName -Name $Resource.Name -Verbose:$false).Where({$_.Version -eq $Resource.ModuleVersion}) | Select-Object -First 1
-        if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
-        {
-            Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $Resource.Name -Verbose:$false
-        }            
-        
+        $tempFunctionName = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Test'
         if (Test-ParameterValidation -Name $tempFunctionName -Values $Resource.Property)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
@@ -430,7 +417,7 @@ function Test-MofResource
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Test', $Resource.Name)
             try
             {
-                $result = &"Test-$($Resource.Name)TargetResource" @splatProperties
+                $result = &"$tempFunctionName" @splatProperties
             }
             catch
             {
@@ -464,6 +451,40 @@ function Test-MofResource
     return $Resource
 }
 
+function Import-TempFunction
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [string]
+        $ModuleName,
+
+        [Parameter(Mandatory = $true)]
+        [string]
+        $ModuleVersion,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Get', 'Test', 'Set')]
+        [string]
+        $Operation,
+
+        [Parameter(Mandatory = $true)]
+        [string]
+        $ResourceName
+    )
+
+    $functionName = "$Operation-TargetResource"
+    $tempFunctionName = $functionName.Replace("-", "-$ResourceName")
+    $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
+    if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
+    {
+        Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
+    }
+    
+    return $tempFunctionName
+}
+
 function Set-MofResource
 {
     [CmdletBinding()]
@@ -474,25 +495,18 @@ function Set-MofResource
         $Resource
     )
 
-    $functionName = "Set-TargetResource"    
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
 
     try
     {
-        $tempFunctionName = $functionName.Replace("-", "-$($Resource.Name)")
-        $dscResource = (Get-DscResource -Module $Resource.ModuleName -Name $Resource.Name -Verbose:$false).Where({$_.Version -eq $Resource.ModuleVersion}) | Select-Object -First 1
-        if(-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
-        {
-            Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $Resource.Name -Verbose:$false
-        }
-        
+        $tempFunctionName = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Set'
         if(Test-ParameterValidation -Name $tempFunctionName -Values $Resource.Property)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
             $splatProperties = Get-ValidParameter -Name $tempFunctionName -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.ResourceName)
 
-            &"Set-$($Resource.Name)TargetResource" @splatProperties
+            &"$tempFunctionName" @splatProperties
         }
         else
         {
