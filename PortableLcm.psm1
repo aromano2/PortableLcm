@@ -45,51 +45,37 @@ class Resource
     }
 }
 
-function Convert-MofResources
+#region Helpers
+function Initialize-MofResources
 {
     [CmdletBinding()]
     param
     (
         [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
         [string]
         $Path
     )
 
-    if (Test-Path -Path $Path -PathType 'Container')
+    [System.Collections.ArrayList]$allResources = Get-MofResources -Path $Path
+    $groupResources = $allResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
+    foreach ($groupResource in $groupResources)
     {
-        Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
-        $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
-    }
-    else
-    {
-        $mofFiles = $path
-    }
+        $group = $groupResource.Group
+        $moduleName = $group.ModuleName | Select-Object -First 1
+        $moduleVersion = $group.ModuleVersion | Select-Object -First 1
 
-    try
-    {
-        $resources = @()
-        foreach ($mofFile in $mofFiles)
+        if(-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
         {
-            $mofResources = ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($mofFile, 4)).Where({-not [string]::IsNullOrEmpty($_.ModuleName)})
-            Write-Verbose -Message $($LocalizedData.FoundResources -f $mofResources.Count, $mofFile)
-            
-            foreach ($resource in $mofResources)
+            Write-Warning -Message $($LocalizedData.ModuleNotPresent -f $moduleName, $moduleVersion, $group.Count, $Path)
+
+            foreach ($missingResource in $group)
             {
-                $resources += Get-MofResourceProperties -Resource $resource -MofFile $mofFile
+                $allResources.Remove($missingResource)
             }
         }
+    }
 
-        return $resources
-    }
-    catch
-    {
-        throw $_.Exception
-    }
-    finally
-    {
-        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
-    }
+    return $allResources
 }
 
 function Get-MofResourceProperties
@@ -218,182 +204,40 @@ function Get-ValidParameter
     return $properties
 }
 
-function Invoke-Mof
+function Import-TempFunction
 {
     [CmdletBinding()]
     param
     (
         [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
         [string]
-        $Path,
+        $ModuleName,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Get', 'ApplyAndMonitor', 'ApplyAndAutoCorrect', 'Test')]
+        [string]
+        $ModuleVersion,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Get', 'Test', 'Set')]
         [string]
         $Operation,
 
-        [Parameter()]
-        [Resource[]]
-        $MonitorResources
-    )
-
-    $oldPreference = $ProgressPreference
-    $ProgressPreference = 'Ignore'
-    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    [System.Collections.ArrayList]$allResources = Convert-MofResources -Path $Path
-    $groupResources = $allResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
-    foreach ($groupResource in $groupResources)
-    {
-        $group = $groupResource.Group
-        $moduleName = $group.ModuleName | Select-Object -First 1
-        $moduleVersion = $group.ModuleVersion | Select-Object -First 1
-
-        if(-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
-        {
-            Write-Warning -Message $($LocalizedData.ModuleNotPresent -f $moduleName, $moduleVersion, $group.Count, $Path)
-
-            foreach ($missingResource in $group)
-            {
-                $allResources.Remove($missingResource)
-            }
-        }
-    }
-
-    try
-    {
-        if ($allResources.Count -gt 0)
-        {
-            switch ($Operation)
-            {
-                'Get'
-                {
-                    foreach ($resource in $allResources)
-                    {
-                        Get-MofResource -Resource $resource -Verbose:$verboseSetting
-                    }
-                }
-
-                'ApplyAndMonitor'
-                {                    
-                    foreach ($resource in $allResources)
-                    {
-                        if ($null -ne $MonitorResources -and $MonitorResources.ResourceID -contains $resource.ResourceID)
-                        {
-                            Write-Verbose -Message ($LocalizedData.MonitorOnlyResource -f $resource.ResourceID)
-                            Test-MofResource -Resource $resource -Verbose:$verboseSetting
-                        }
-                        else
-                        {
-                            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-                            
-                            if (-not $result.InDesiredState)
-                            {
-                                Set-MofResource -Resource $resource -Verbose:$verboseSetting
-                            }
-                        }
-                    }
-
-                    break
-                }
-
-                'ApplyAndAutoCorrect'
-                {
-                    foreach ($resource in $allResources)
-                    {
-                        $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-                            
-                        if (-not $result.InDesiredState)
-                        {
-                            Set-MofResource -Resource $resource -Verbose:$verboseSetting
-                        }
-                    }
-
-                    break
-                }
-
-                'Test'
-                {
-                    foreach ($resource in $allResources)
-                    {
-                        Test-MofResource -Resource $resource -Verbose:$verboseSetting
-                    }
-                }
-            }
-        }
-    }
-    finally
-    {
-        $ProgressPreference = $oldPreference
-    }
-}
-
-function Get-MofResource
-{
-    [CmdletBinding()]
-    param
-    (
         [Parameter(Mandatory = $true)]
-        [Resource]
-        $Resource
+        [string]
+        $ResourceName
     )
 
-    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-
-    try
+    $functionName = "$Operation-TargetResource"
+    $tempFunctionName = $functionName.Replace("-", "-$ResourceName")
+    $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
+    if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
     {
-        $tempFunctionName = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Get'
-
-        if(Test-ParameterValidation -Name $tempFunctionName -Values $Resource.Property)
-        {
-            Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Get-ValidParameter -Name $tempFunctionName -Values $Resource.Property -Verbose:$verboseSetting
-            Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Get',$Resource.Name)
-
-            $get = & "$tempFunctionName" @splatProperties
-            $cimGetResults = New-Object -TypeName 'System.Collections.ObjectModel.Collection`1[Microsoft.Management.Infrastructure.CimInstance]'
-            foreach ($row in $get.Keys.GetEnumerator())
-            {
-                $value = $get.$row
-
-                $CimProperties = @{
-                    Namespace = 'root/Microsoft/Windows/DesiredStateConfiguration'
-                    ClassName = "MSFT_KeyValuePair"
-                    Property  = @{
-                        Key   = "$row"
-                        Value = "$value"
-                    }
-                }
-
-                $cimGetResults += New-CimInstance -ClientOnly @CimProperties
-            }
-
-            $returnValue = @{
-                ResourceName  = $Resource.ResourceName
-                ResourceId    = $Resource.ResourceId
-                ModuleName    = $Resource.ModuleName
-                ModuleVersion = $Resource.ModuleVersion
-                Properties    = $Resource.Property
-                Result        = $cimGetResults
-            }
-
-            return $returnValue
-        }
-        else
-        {
-            Write-Warning -Message ($LocalizedData.ParametersNotValidated -f $Resource.ResourceId)
-            return
-        }
+        Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
     }
-    catch
-    {
-        throw $_.Exception
-    }
-    finally
-    {
-        Remove-Module -FullyQualifiedName $dscResource.Path
-    }
+    
+    return $tempFunctionName
 }
+
 
 function Test-MofResource
 {
@@ -451,40 +295,6 @@ function Test-MofResource
     return $Resource
 }
 
-function Import-TempFunction
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(Mandatory = $true)]
-        [string]
-        $ModuleName,
-
-        [Parameter(Mandatory = $true)]
-        [string]
-        $ModuleVersion,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('Get', 'Test', 'Set')]
-        [string]
-        $Operation,
-
-        [Parameter(Mandatory = $true)]
-        [string]
-        $ResourceName
-    )
-
-    $functionName = "$Operation-TargetResource"
-    $tempFunctionName = $functionName.Replace("-", "-$ResourceName")
-    $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
-    if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
-    {
-        Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
-    }
-    
-    return $tempFunctionName
-}
-
 function Set-MofResource
 {
     [CmdletBinding()]
@@ -523,5 +333,145 @@ function Set-MofResource
         Remove-Module -FullyQualifiedName $dscResource.Path
     }
 }
+#endregion Helpers
 
-Export-ModuleMember -Function Invoke-Mof
+<#
+    .SYNOPSIS
+        Returns all resources in a MOF file as a resource object.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file
+
+    .EXAMPLE
+        Get-MofResources -Path C:\temp\file.mof
+#>
+function Get-MofResources
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path
+    )
+
+    if (Test-Path -Path $Path -PathType 'Container')
+    {
+        Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
+        $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
+    }
+    else
+    {
+        $mofFiles = $path
+    }
+
+    try
+    {
+        $resources = @()
+        foreach ($mofFile in $mofFiles)
+        {
+            $mofResources = ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($mofFile, 4)).Where({-not [string]::IsNullOrEmpty($_.ModuleName)})
+            Write-Verbose -Message $($LocalizedData.FoundResources -f $mofResources.Count, $mofFile)
+            
+            foreach ($resource in $mofResources)
+            {
+                $resources += Get-MofResourceProperties -Resource $resource -MofFile $mofFile
+            }
+        }
+
+        return $resources
+    }
+    catch
+    {
+        throw $_.Exception
+    }
+    finally
+    {
+        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
+    }
+}
+
+<#
+    .SYNOPSIS 
+        Tests resource states defined in a MOF file.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file
+
+    .EXAMPLE
+        Test-MofConfig -Path C:\temp\file.mof -Operation Get
+#>
+function Test-MofConfig
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path
+    )
+
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+    $allResources = Initialize-MofResources -Path $Path
+    
+    foreach ($resource in $allResources)
+    {
+        Test-MofResource -Resource $resource -Verbose:$verboseSetting
+    }
+}
+
+<#
+    .SYNOPSIS
+        Applies configuration from a MOF file. Will not apply configuration to resources specified in MonitorResources.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file.
+
+    .PARAMETER MonitorResources
+        Resources that have been applied before and will not be changed. Only used with 'ApplyAndMonitor' action.
+
+    .EXAMPLE
+        Assert-MofConfig -Path C:\temp\file.mof
+
+    .EXAMPLE
+        $monitor = [Resource]::new("MyFileResource", "ResourceId", "C:\temp\file.mof", "MyModuleName", "MyModuleVersion", @{Property1 = 2}, $false)
+        Assert-MofConfig -Path C:\temp\file.mof -MonitorResources $monitorResources
+
+        This example will enforce the configuration from file.mof with exception to the resource named MyFileResource. Even though it is not in desired
+        state, it will not enforce its desired state.
+#>
+function Assert-MofConfig
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path,
+
+        [Parameter(ParameterSetName = 'Monitor', Mandatory = $true)]
+        [Resource[]]
+        $MonitorResources
+    )
+
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+    $allResources = Initialize-MofResources -Path $Path
+
+    foreach ($resource in $allResources)
+    {
+        Write-Verbose -Message ($LocalizedData.MonitorOnlyResource -f $resource.ResourceID)
+        $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+        if(-not $MonitorResources -or $MonitorResources.ResourceID -notcontains $resource.ResourceID)
+        {
+            if (-not $result.InDesiredState)
+            {
+                Set-MofResource -Resource $resource -Verbose:$verboseSetting
+            }
+        }
+    }
+}
+
+Export-ModuleMember -Function Assert-MofConfig, Test-MofConfig, Get-MofResources
