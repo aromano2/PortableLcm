@@ -212,15 +212,7 @@ function Get-ValidParameter
         }
     }
 
-    if ($PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose'])
-    {
-        $verboseSetting = $true
-    }
-    else
-    {
-        $verboseSetting = $false
-    }
-
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     $properties.Add('Verbose', $verboseSetting)
     $properties.Add('ErrorAction', 'Stop')
     return $properties
@@ -248,15 +240,7 @@ function Invoke-Mof
 
     $oldPreference = $ProgressPreference
     $ProgressPreference = 'Ignore'
-    if ($PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose'])
-    {
-        $verboseSetting = $true
-    }
-    else
-    {
-        $verboseSetting = $false
-    }
-
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     [System.Collections.ArrayList]$allResources = Convert-MofResources -Path $Path
     $groupResources = $allResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
     foreach ($groupResource in $groupResources)
@@ -355,14 +339,8 @@ function Get-MofResource
     )
 
     $functionName = 'Get-TargetResource'
-    if ($PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose'])
-    {
-        $verboseSetting = $true
-    }
-    else
-    {
-        $verboseSetting = $false
-    }
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+
     try
     {
         $tempFunctionName = $functionName.Replace("-", "-$($Resource.Name)")
@@ -434,14 +412,7 @@ function Test-MofResource
     )
 
     $functionName = 'Test-TargetResource'
-    if ($PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose'])
-    {
-        $verboseSetting = $true
-    }
-    else
-    {
-        $verboseSetting = $false
-    }
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
 
     try
     {
@@ -504,15 +475,8 @@ function Set-MofResource
     )
 
     $functionName = "Set-TargetResource"    
-    if ($PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose'])
-    {
-        $verboseSetting = $true
-    }
-    else
-    {
-        $verboseSetting = $false
-    }
-    
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+
     try
     {
         $tempFunctionName = $functionName.Replace("-", "-$($Resource.Name)")
