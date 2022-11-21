@@ -2,6 +2,7 @@
 Import-Module "$PSScriptRoot\..\..\PortableLcm.psm1" -Force
 
 Describe 'Assert-MofConfig' {
+    Mock -CommandName Test-ModulePresent -MockWith { $true }
     Context 'Calling Assert-MofConfig with bad path' {
         It 'Should throw' {
             { Assert-MofConfig -Path fake } | Should -Throw

@@ -7,9 +7,8 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Install dependencies
+    - name: Run Pester tests
       run: |
-        $psversiontable
         Set-PSRepository psgallery -InstallationPolicy trusted
         Install-Module -Name Pester -RequiredVersion 5.0.4 -Confirm:$false -Force
         Install-Module -Name PSDesiredStateConfiguration -RequiredVersion 2.0.5 -Confirm:$false -AllowClobber -Force
