@@ -15,6 +15,7 @@ data LocalizedData
     ResourceInDesiredState = Resource '{0}' is in desired state.
     TestException = Exception thrown: {0}.
     MonitorOnlyResource = Resource '{0}' is set to monitor only. Set will be skipped.
+    GetModule = Installing module '{0}:{1}'.
 '@
 }
 
@@ -46,6 +47,19 @@ class Resource
 }
 
 #region Helpers
+<#
+    .SYNOPSIS
+        Imports resources from MOF file and converts them to resource objects.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file.
+
+    .PARAMETER
+        Optionally download modules required by the MOF resources.
+
+    .EXAMPLE
+        Initialize-MofResources -Path C:\test\test.mof -DownloadModules
+#>
 function Initialize-MofResources
 {
     [CmdletBinding()]
@@ -53,9 +67,14 @@ function Initialize-MofResources
     (
         [Parameter(Mandatory = $true)]
         [string]
-        $Path
+        $Path,
+
+        [Parameter()]
+        [switch]
+        $DownloadModules
     )
 
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     [System.Collections.ArrayList]$allResources = Get-MofResources -Path $Path
     $groupResources = $allResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
     foreach ($groupResource in $groupResources)
@@ -66,6 +85,12 @@ function Initialize-MofResources
 
         if(-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
         {
+            if ($DownloadModules)
+            {
+                Write-Verbose -Message ($LocalizedData.GetModule -f $moduleName, $moduleVersion)
+                $null = Install-Module -Name $moduleName -RequiredVersion $moduleVersion -AllowClobber -Force -Verbose:$verboseSetting
+            }
+
             Write-Warning -Message $($LocalizedData.ModuleNotPresent -f $moduleName, $moduleVersion, $group.Count, $Path)
 
             foreach ($missingResource in $group)
@@ -78,7 +103,35 @@ function Initialize-MofResources
     return $allResources
 }
 
-function Get-MofResourceProperties
+<#
+    .SYNOPSIS
+        Converts a CIM Instance MOF resource to a Resource object with only relative properties.
+
+    .PARAMETER Resource
+        Cim instance resource to convert.
+
+    .PARAMETER MofFile
+        Path to MOF file that the resource came from.
+
+    .EXAMPLE
+        $resource = @{
+            ResourceID        = '[RegistryPolicyFile][V-46473][medium][DTBI014-IE11-TLS setting]::[InternetExplorer]BrowserStig'
+            ValueName         = 'SecureProtocols'
+            Ensure            = 'Present'
+            Key               = 'Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+            ValueData         = '{2560}'
+            SourceInfo        = 'C:\Program Files\WindowsPowerShell\Modules\PowerSTIG\4.3.0\DSCResources\Resources\windows.Registry.ps1::40::13::RegistryPolicyFile'
+            ValueType         = 'Dword'
+            ModuleName        = 'GPRegistryPolicyDsc'
+            TargetType        = 'ComputerConfiguration'
+            ModuleVersion     = '1.2.0'
+            ConfigurationName = 'MyConfiguration'
+            PSComputerName    = ''
+        }
+
+        Convert-MofResource -Resource $resource -MofFile C:\temp\MyConfiguration.mof
+#>
+function Convert-MofResource
 {
     [CmdletBinding()]
     param
@@ -109,7 +162,29 @@ function Get-MofResourceProperties
     return [Resource]::new($resourceName, $Resource.ResourceID, $MofFile, $Resource.ModuleName, $Resource.ModuleVersion, $properties, $false)
 }
 
-function Test-ParameterValidation
+<#
+    .SYNOPSIS
+        Tests a resource's properties to ensure it is not missing any mandatory parameters.
+
+    .PARAMETER Name
+        Name of the function to test against.
+
+    .PARAMETER Values
+        Property hashtable to validate against the function.
+
+    .EXAMPLE
+        $properties = @{
+            ValueName  = 'SecureProtocols'
+            ValueData  = '{2560}'
+            Ensure     = 'Present'
+            ValueType  = 'Dword'
+            TargetType = 'ComputerConfiguration'
+            Key        = 'Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+        }
+
+        Test-MandatoryParameter -Name 'Test-RegistryPolicyFileTargetResource' -Values $properties
+#>
+function Test-MandatoryParameter
 {
     [CmdletBinding()]
     param
@@ -143,6 +218,19 @@ function Test-ParameterValidation
     return (-not $hasErrors)
 }
 
+<#
+    .SYNOPSIS
+        Tests if a specific version of a module is present.
+
+    .PARAMETER ModuleName
+        Name of the module.
+
+    .PARAMETER ModuleVersion
+        Version of the module.
+
+    .EXAMPLE
+        Test-ModulePresent -ModuleName 'ComputerManagementDsc' -ModuleVersion '1.0.0'
+#>
 function Test-ModulePresent
 {
     [CmdletBinding()]
@@ -169,7 +257,33 @@ function Test-ModulePresent
     }
 }
 
-function Get-ValidParameter
+<#
+    .SYNOPSIS
+        Checks to see if a hashtable contains valid parameters from a function.
+
+    .PARAMETER Name
+        Name of the function to test parameters against.
+
+    .PARAMETER Values
+        Hashtable of properties to test.
+
+    .EXAMPLE
+        $properties = @{
+            Key                  = 'Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+            TargetType           = 'ComputerConfiguration'
+            AccountName          = ''
+            PsDscRunAsCredential = ''
+            ValueType            = 'Dword'
+            ValueData            = '{2560}'
+            Ensure               = 'Present'
+            ValueName            = 'SecureProtocols'
+            Path                 = ''
+            DependsOn            = ''
+        }
+
+        Test-Parameter -Name 'Test-RegistryPolicyFileTargetResource' -Values $properties
+#>
+function Test-Parameter
 {
     [CmdletBinding()]
     param
@@ -204,6 +318,25 @@ function Get-ValidParameter
     return $properties
 }
 
+<#
+    .SYNOPSIS
+        Imports a function from a specified module with a prefix.
+
+    .PARAMETER ModuleName
+        Name of the module.
+
+    .PARAMETER ModuleVersion
+        Version of the module.
+
+    .PARAMETER Operation
+        Which function to get; get, set or test.
+    
+    .PARAMETER ResourceName
+        Name of the DSC resource to retrieve a function from.
+
+    .EXAMPLE
+        Import-TempFunction -ModuleName ComputerManagementDsc -ModuleVersion 8.4.0 -Operation Get -ResourceName TimeZone
+#>
 function Import-TempFunction
 {
     [CmdletBinding()]
@@ -235,10 +368,38 @@ function Import-TempFunction
         Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
     }
     
-    return $tempFunctionName
+    return @{
+        Name = $tempFunctionName
+        Path = $dscResource.Path
+    }
 }
 
+<#
+    .SYNOPSIS
+        Executes the test method for a given resource.
 
+    .PARAMETER Resource
+        Resource object to test.
+
+    .EXAMPLE
+        $resource = @{
+            Name          = 'RegistryPolicyFile'
+            MofFile       = 'C:\Temp\myConfig.mof'
+            ResourceId    = '[RegistryPolicyFile][V-46473][medium][DTBI014-IE11-TLS setting]::[InternetExplorer]BrowserStig'
+            ModuleName    = 'GPRegistryPolicyDsc'
+            ModuleVersion = '1.2.0'
+            Property      = @{
+                ValueName  = 'SecureProtocols'
+                ValueData  = '{2560}'
+                Ensure     = 'Present'
+                ValueType  = 'Dword'
+                TargetType = 'ComputerConfiguration'
+                Key        = 'Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+            }
+        }
+
+        Test-MofResource -Resource $resource
+#>
 function Test-MofResource
 {
     [CmdletBinding()]
@@ -253,15 +414,15 @@ function Test-MofResource
 
     try
     {
-        $tempFunctionName = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Test'
-        if (Test-ParameterValidation -Name $tempFunctionName -Values $Resource.Property)
+        $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Test'
+        if (Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Property)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Get-ValidParameter -Name $tempFunctionName -Values $Resource.Property -Verbose:$verboseSetting
+            $splatProperties = Test-Parameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Test', $Resource.Name)
             try
             {
-                $result = &"$tempFunctionName" @splatProperties
+                $result = &"$($tempFunction.Name)" @splatProperties
             }
             catch
             {
@@ -289,12 +450,38 @@ function Test-MofResource
     }
     finally
     {
-        Remove-Module -FullyQualifiedName $dscResource.Path
+        Remove-Module -FullyQualifiedName $tempFunction.Path
     }
 
     return $Resource
 }
 
+<#
+    .SYNOPSIS
+        Executes the set method for a given resource.
+
+    .PARAMETER Resource
+        Resource object to set.
+
+    .EXAMPLE
+        $resource = @{
+            Name          = 'RegistryPolicyFile'
+            MofFile       = 'C:\Temp\myConfig.mof'
+            ResourceId    = '[RegistryPolicyFile][V-46473][medium][DTBI014-IE11-TLS setting]::[InternetExplorer]BrowserStig'
+            ModuleName    = 'GPRegistryPolicyDsc'
+            ModuleVersion = '1.2.0'
+            Property      = @{
+                ValueName  = 'SecureProtocols'
+                ValueData  = '{2560}'
+                Ensure     = 'Present'
+                ValueType  = 'Dword'
+                TargetType = 'ComputerConfiguration'
+                Key        = 'Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+            }
+        }
+
+        Set-MofResource -Resource $resource
+#>
 function Set-MofResource
 {
     [CmdletBinding()]
@@ -309,14 +496,14 @@ function Set-MofResource
 
     try
     {
-        $tempFunctionName = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Set'
-        if(Test-ParameterValidation -Name $tempFunctionName -Values $Resource.Property)
+        $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Set'
+        if(Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Property)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Get-ValidParameter -Name $tempFunctionName -Values $Resource.Property -Verbose:$verboseSetting
+            $splatProperties = Test-Parameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.ResourceName)
 
-            &"$tempFunctionName" @splatProperties
+            &"$($tempFunction.Name)" @splatProperties
         }
         else
         {
@@ -330,7 +517,7 @@ function Set-MofResource
     }
     finally
     {
-        Remove-Module -FullyQualifiedName $dscResource.Path
+        Remove-Module -FullyQualifiedName $tempFunction.Path
     }
 }
 #endregion Helpers
@@ -376,7 +563,7 @@ function Get-MofResources
             
             foreach ($resource in $mofResources)
             {
-                $resources += Get-MofResourceProperties -Resource $resource -MofFile $mofFile
+                $resources += Convert-MofResource -Resource $resource -MofFile $mofFile
             }
         }
 
@@ -410,11 +597,15 @@ function Test-MofConfig
         [Parameter(Mandatory = $true)]
         [ValidateScript({Test-Path -Path $_})]
         [string]
-        $Path
+        $Path,
+
+        [Parameter()]
+        [switch]
+        $DownloadModules
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    $allResources = Initialize-MofResources -Path $Path
+    $allResources = Initialize-MofResources -Path $Path -DownloadModules:$DownloadModules -Verbose:$verboseSetting
     
     foreach ($resource in $allResources)
     {
@@ -452,13 +643,17 @@ function Assert-MofConfig
         [string]
         $Path,
 
-        [Parameter(ParameterSetName = 'Monitor', Mandatory = $true)]
+        [Parameter()]
         [Resource[]]
-        $MonitorResources
+        $MonitorResources,
+
+        [Parameter()]
+        [switch]
+        $DownloadModules
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    $allResources = Initialize-MofResources -Path $Path
+    $allResources = Initialize-MofResources -Path $Path -DownloadModules:$DownloadModules
 
     foreach ($resource in $allResources)
     {
