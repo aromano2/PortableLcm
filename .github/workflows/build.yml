@@ -13,16 +13,16 @@ jobs:
         Install-Module -Name Pester -RequiredVersion 5.0.4 -Confirm:$false -Force
         Install-Module -Name PSDesiredStateConfiguration -RequiredVersion 2.0.5 -Confirm:$false -AllowClobber -Force   
       shell: pwsh
-    - name: test module
-      id: test_module
+    - name: Run Pester
+      id: run_pester
       uses: zyborg/pester-tests-report@v1
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         report_name: module_tests
         report_title: PortableLcm Tests
-    - name: dump test results
+    - name: Export test results
       shell: pwsh
       run: |
-        Write-Host 'Total Tests Executed...:  ${{ steps.test_module.outputs.total_count }}'
-        Write-Host 'Total Tests PASSED.....:  ${{ steps.test_module.outputs.passed_count }}'
-        Write-Host 'Total Tests FAILED.....:  ${{ steps.test_module.outputs.failed_count }}'
+        Write-Host 'Total Tests Executed...:  ${{ steps.run_pester.outputs.total_count }}'
+        Write-Host 'Total Tests PASSED.....:  ${{ steps.run_pester.outputs.passed_count }}'
+        Write-Host 'Total Tests FAILED.....:  ${{ steps.run_pester.outputs.failed_count }}'
