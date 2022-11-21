@@ -3,7 +3,7 @@ on:
   push:
     branches: [ main ]
 jobs:
-  test-pwsh:
+  unit-test:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v2
@@ -12,5 +12,10 @@ jobs:
         Set-PSRepository psgallery -InstallationPolicy trusted
         Install-Module -Name Pester -RequiredVersion 5.0.4 -Confirm:$false -Force
         Install-Module -Name PSDesiredStateConfiguration -RequiredVersion 2.0.5 -Confirm:$false -AllowClobber -Force
-        Invoke-Pester -Path "*.Tests.ps1"        
+        $results = Invoke-Pester -Path "*.Tests.ps1" -PassThru
+        if ($result.FailedCount -gt 0)
+        {
+          return 0
+        }
+        else{return 1}       
       shell: pwsh
