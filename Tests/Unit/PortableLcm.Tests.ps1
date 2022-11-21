@@ -7,13 +7,51 @@ Describe 'Assert-MofConfig' {
             { Assert-MofConfig -Path fake } | Should -Throw
         }        
     }
+
+    Context 'Calling Assert-MofConfig with good path' {
+        It 'Shoult not throw' {
+            { Assert-MofConfig -Path $PSScriptRoot\Test.mof } | Should -Not -Throw
+        }
+
+        It 'Should only return 1 resource from test MOF' {
+            Mock -CommandName Test-MofResource -ModuleName 'PortableLcm'
+            Mock -CommandName Set-MofResource -ModuleName 'PortableLcm'
+
+            Assert-MofConfig -Path $PSScriptRoot\Test.mof
+            Should -Invoke -CommandName Test-MofResource -Times 1 -Exactly -ModuleName 'PortableLcm'
+            Should -Invoke -CommandName Set-MofResource -Times 1 -Exactly -ModuleName 'PortableLcm'
+        }
+
+        InModuleScope 'PortableLcm' {
+            It 'Should not try to Set a monitored resource' {
+                $resourceId = '[UserRightsAssignment][V-26473][medium][Allow log on through Remote Desktop Services]::[WindowsServer]WindowsServerADStig'
+                Mock -CommandName Test-MofResource -ModuleName 'PortableLcm' -MockWith { return @{
+                        ResourceId     = $resourceId
+                        InDesiredState = $false
+                    }
+                }
+
+                Mock -CommandName Set-MofResource -ModuleName 'PortableLcm'
+                $resource = [Resource]::new('fake', $resourceId, 'fake', 'fake', 'fake', @{}, $false)
+                Assert-MofConfig -Path $PSScriptRoot\Test.mof -MonitorResources $resource
+                Should -Invoke -CommandName Test-MofResource -Times 1 -Exactly -ModuleName 'PortableLcm'
+                Should -Invoke -CommandName Set-MofResource -Times 0 -Exactly -ModuleName 'PortableLcm'
+            }
+        }
+    }
 }
 
 Describe 'Get-MofResources' {
     Context 'Calling Get-MofResources with bad path' {
         It 'Should throw' {
-            { Test-MofConfig -Path fake } | Should -Throw
+            { Get-MofResources -Path fake } | Should -Throw
         }        
+    }
+
+    Context 'Calling Get-MofResources with good path' {
+        It 'Shoult not throw' {
+            { Get-MofResources -Path $PSScriptRoot\Test.mof } | Should -Not -Throw
+        }
     }
 }
 
@@ -22,5 +60,11 @@ Describe 'Test-MofConfig' {
         It 'Should throw' {
             { Test-MofConfig -Path fake } | Should -Throw
         }        
+    }
+
+    Context 'Calling Test-MofConfig with good path' {
+        It 'Shoult not throw' {
+            { Test-MofConfig -Path $PSScriptRoot\Test.mof } | Should -Not -Throw
+        }
     }
 }

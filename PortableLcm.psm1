@@ -75,7 +75,7 @@ function Initialize-MofResources
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    [System.Collections.ArrayList]$allResources = Get-MofResources -Path $Path
+    $allResources = Get-MofResources -Path $Path
     $groupResources = $allResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
     foreach ($groupResource in $groupResources)
     {
@@ -555,7 +555,7 @@ function Get-MofResources
 
     try
     {
-        $resources = @()
+        $resources = New-Object -TypeName System.Collections.ArrayList
         foreach ($mofFile in $mofFiles)
         {
             $mofResources = ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($mofFile, 4)).Where({-not [string]::IsNullOrEmpty($_.ModuleName)})

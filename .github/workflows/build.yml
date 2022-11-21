@@ -11,18 +11,14 @@ jobs:
       run: |
         Set-PSRepository psgallery -InstallationPolicy trusted
         Install-Module -Name Pester -RequiredVersion 5.0.4 -Confirm:$false -Force
-        Install-Module -Name PSDesiredStateConfiguration -RequiredVersion 2.0.5 -Confirm:$false -AllowClobber -Force   
+        Install-Module -Name PSDesiredStateConfiguration -RequiredVersion 2.0.5 -Confirm:$false -AllowClobber -Force
+        $result = Invoke-Pester -Path *.Tests.ps1 -PassThru -Show All
+        if ($result.FailedCount -gt 0)
+        {
+          exit 1
+        }
+        else
+        {
+          exit 0
+        }
       shell: pwsh
-    - name: Run Pester
-      id: run_pester
-      uses: zyborg/pester-tests-report@v1
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        report_name: module_tests
-        report_title: PortableLcm Tests
-    - name: Export test results
-      shell: pwsh
-      run: |
-        Write-Host 'Total Tests Executed...:  ${{ steps.run_pester.outputs.total_count }}'
-        Write-Host 'Total Tests PASSED.....:  ${{ steps.run_pester.outputs.passed_count }}'
-        Write-Host 'Total Tests FAILED.....:  ${{ steps.run_pester.outputs.failed_count }}'

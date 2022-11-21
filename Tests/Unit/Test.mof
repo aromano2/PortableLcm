@@ -1,0 +1,49 @@
+/*
+@TargetNode='192.0.0.1'
+@GeneratedBy=admin
+@GenerationDate=11/21/2022 19:40:29
+@GenerationHost=TestServer
+*/
+
+instance of MSFT_UserRightsAssignment as $MSFT_UserRightsAssignment5ref
+{
+ResourceID = "[UserRightsAssignment][V-26473][medium][Allow log on through Remote Desktop Services]::[WindowsServer]WindowsServerADStig";
+ Force = True;
+ Policy = "Allow_log_on_through_Remote_Desktop_Services";
+ SourceInfo = "C:\\Program Files\\WindowsPowerShell\\Modules\\PowerSTIG\\4.3.0\\DSCResources\\Resources\\windows.UserRightsAssignment.ps1::56::5::UserRightsAssignment";
+ Identity = {
+    "Builtin\\Administrators"
+};
+ ModuleName = "SecurityPolicyDsc";
+ ModuleVersion = "2.4.0.0";
+
+ ConfigurationName = "PowerStigConfiguration";
+
+};
+instance of OMI_ConfigurationDocument
+
+
+                    {
+ Version="2.0.0"; 
+ ContentType="PasswordEncrypted";
+ 
+
+                        MinimumCompatibleVersion = "1.0.0";
+ 
+
+                        CompatibleVersionAdditionalProperties= {"Omi_BaseResource:ConfigurationName"};
+ 
+
+                        Author="xadmin";
+ 
+
+                        GenerationDate="03/09/2021 19:40:29";
+ 
+
+                        GenerationHost="TestServer";
+ 
+
+                        Name="PowerStigConfiguration";
+
+
+                    };
