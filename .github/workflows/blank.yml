@@ -1,0 +1,16 @@
+name: Pester
+on:
+  push:
+    branches: [ main ]
+jobs:
+  test-pwsh:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Run Pester tests
+      run: |
+        Set-PSRepository psgallery -InstallationPolicy trusted
+        Install-Module -Name Pester -RequiredVersion 5.0.4 -Confirm:$false -Force
+        Install-Module -Name PSDesiredStateConfiguration -RequiredVersion 2.0.5 -Confirm:$false -AllowClobber -Force
+        Invoke-Pester -Path "*.Tests.ps1"        
+      shell: pwsh
