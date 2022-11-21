@@ -15,7 +15,7 @@ jobs:
         $results = Invoke-Pester -Path "*.Tests.ps1" -PassThru
         if ($result.FailedCount -gt 0)
         {
-          return 0
+          exit 0
         }
-        else{return 1}       
+        else{exit 1}       
       shell: pwsh
