@@ -18,7 +18,6 @@ jobs:
       uses: zyborg/pester-tests-report@v1
       with:
         github_token: ${{ sercrets.GH_TOKEN }}
-        include_paths: *.Tests.ps1
         report_name: module_tests
         report_title: PortableLcm Tests
     - name: dump test results
