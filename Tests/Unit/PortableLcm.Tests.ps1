@@ -46,8 +46,8 @@ InModuleScope 'PortableLcm' {
                 Mock -CommandName 'Install-Module' -ModuleName 'PortableLcm'
                 Assert-MofConfig -Path $PSScriptRoot\Test.mof -DownloadModules
 
-                Should -Invoke -CommandName 'Install-Module' -Times 1 -Exactly
-                Should -Invoke -CommandName 'Write-Warning' -Times 1 -Exactly
+                Should -Invoke -CommandName 'Install-Module' -Times 1 -Exactly -ModuleName 'PortableLcm'
+                Should -Invoke -CommandName 'Write-Warning' -Times 1 -Exactly -ModuleName 'PortableLcm'
             }
         }
     }    
