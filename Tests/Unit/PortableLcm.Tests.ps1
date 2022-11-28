@@ -12,6 +12,10 @@ InModuleScope 'PortableLcm' {
         }
 
         Context 'Calling Assert-MofConfig with good path' {
+            AfterEach {
+                Uninstall-Module -Name SecurityPolicyDsc
+            }
+            
             It 'Shoult not throw' {
                 { Assert-MofConfig -Path $PSScriptRoot\Test.mof -DownloadModules } | Should -Not -Throw
             }
