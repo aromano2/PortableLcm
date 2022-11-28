@@ -13,7 +13,7 @@ InModuleScope 'PortableLcm' {
 
         Context 'Calling Assert-MofConfig with good path' {
             It 'Shoult not throw' {
-                { Assert-MofConfig -Path $PSScriptRoot\Test.mof } | Should -Not -Throw
+                { Assert-MofConfig -Path $PSScriptRoot\Test.mof -DownloadModules } | Should -Not -Throw
             }
 
             It 'Should only return 1 resource from test MOF' {
@@ -44,10 +44,10 @@ InModuleScope 'PortableLcm' {
                 Mock -CommandName 'Test-ModulePresent' -MockWith { $false } -ModuleName 'PortableLcm'
                 Mock -CommandName 'Test-MofResource' -MockWith { $true } -ModuleName 'PortableLcm'
                 Mock -CommandName 'Install-Module' -ModuleName 'PortableLcm'
-
                 Assert-MofConfig -Path $PSScriptRoot\Test.mof -DownloadModules
 
                 Should -Invoke -CommandName 'Install-Module' -Times 1 -Exactly
+                Should -Invoke -CommandName 'Write-Warning' -Times 1 -Exactly
             }
         }
     }    

@@ -660,7 +660,7 @@ function Assert-MofConfig
         $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
         if(-not $MonitorResources -or $MonitorResources.ResourceID -notcontains $resource.ResourceID)
         {
-            if (-not $result.InDesiredState)
+            if (-not $result)
             {
                 Set-MofResource -Resource $resource -Verbose:$verboseSetting
             }
