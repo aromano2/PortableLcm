@@ -95,7 +95,7 @@ function Initialize-MofResources
 
             foreach ($missingResource in $group)
             {
-                $allResources.Remove($missingResource)
+                $allResources = $allResources.Where({$_.ResourceId -eq $missingResource.ResourceID})
             }
         }
     }
@@ -432,7 +432,6 @@ function Test-MofResource
             if ($result)
             {
                 Write-Verbose -Message ($LocalizedData.ResourceInDesiredState -f $Resource.ResourceId)
-                $Resource.InDesiredState = $true
             }
             else
             {
