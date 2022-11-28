@@ -19,6 +19,21 @@ data LocalizedData
 '@
 }
 
+$global:MofConfigPath = Join-Path -Path $PSScriptRoot -ChildPath 'Config.json'
+if (-not (Test-Path -Path $global:MofConfigPath))
+{
+    $global:MofLogPath = Join-Path -Path $PSScriptRoot -ChildPath 'Logs\log.json'
+    $jsonOutput = @{
+        LogPath = $MofLogPath
+    }
+    
+    Out-File -FilePath $global:MofConfigPath -InputObject ($jsonOutput | ConvertTo-Json)
+}
+else
+{
+    $global:MofLogPath = (Get-Content -Path $global:MofConfigPath | ConvertFrom-Json).LogPath
+}
+
 class Resource
 {
     [string] $Name
@@ -28,13 +43,17 @@ class Resource
     [string] $ModuleVersion
     [hashtable] $Property
     [bool] $InDesiredState
+    [string] $Exception
+    [string] $LastSet
+    [string] $LastTest
+    [string] $Mode
 
     Resource()
     {
         $this.Properties = [hashtable]::new()
     }
 
-    Resource([String]$ResourceName, [string]$ResourceId , [string]$MofFile, [String]$ModuleName, [String]$ModuleVersion, [hashtable]$Properties, [bool] $InDesiredState = $false)
+    Resource([String]$ResourceName, [string]$ResourceId , [string]$MofFile, [String]$ModuleName, [String]$ModuleVersion, [hashtable]$Properties)
     {
         $this.Name           = $ResourceName
         $this.ResourceId     = $ResourceId
@@ -42,11 +61,37 @@ class Resource
         $this.ModuleName     = $ModuleName
         $this.ModuleVersion  = $ModuleVersion
         $this.Property       = $Properties
-        $this.InDesiredState = $InDesiredState
     }
 }
 
 #region Helpers
+function Get-TimeStamp
+{
+    return Get-Date -Format 'MM/dd/yy hh:mm:ss'
+}
+
+function Update-MofResourceLog
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [Resource]
+        $Resource,
+
+        [Parameter()]
+        [ValidateScript({-not [string]::IsNullOrEmpty($_)})]
+        [Newtonsoft.Json.Linq.JArray]
+        $JsonLog
+    )
+
+    if ($JsonLog)
+    {
+
+    }
+
+}
+
 <#
     .SYNOPSIS
         Imports resources from MOF file and converts them to resource objects.
@@ -159,7 +204,7 @@ function Convert-MofResource
         $properties.Add($key, $Resource.$key)
     }
 
-    return [Resource]::new($resourceName, $Resource.ResourceID, $MofFile, $Resource.ModuleName, $Resource.ModuleVersion, $properties, $false)
+    return [Resource]::new($resourceName, $Resource.ResourceID, $MofFile, $Resource.ModuleName, $Resource.ModuleVersion, $properties)
 }
 
 <#
@@ -422,10 +467,13 @@ function Test-MofResource
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Test', $Resource.Name)
             try
             {
+                $Resource.LastTest = Get-TimeStamp
                 $result = &"$($tempFunction.Name)" @splatProperties
+                $Resource.InDesiredState = $result
             }
             catch
             {
+                $Resource.Exception = $_.Exception
                 Write-Error -Message ($LocalizedData.TestException -f $_.Exception)
             }
 
@@ -492,7 +540,7 @@ function Set-MofResource
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-
+    
     try
     {
         $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Set'
@@ -502,7 +550,18 @@ function Set-MofResource
             $splatProperties = Test-Parameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.ResourceName)
 
-            &"$($tempFunction.Name)" @splatProperties
+            try
+            {
+                $Resource.LastSet = Get-TimeStamp
+                &"$($tempFunction.Name)" @splatProperties
+                $Resource.InDesiredState = $true
+            }
+            catch
+            {
+                $Resource.Exception = $_.Exception
+            }
+
+            return $Resource
         }
         else
         {
@@ -520,6 +579,26 @@ function Set-MofResource
     }
 }
 #endregion Helpers
+
+function Set-MofLogPath
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateScript({[System.IO.Path]::GetExtension($_) -eq '.json'})]
+        [string]
+        $Path
+    )
+
+    if (-not (Test-Path -Path $Path))
+    {
+        $null = New-Item -Path $Path -ItemType 'File'
+    }
+
+    $null = @{ LogPath = $Path } | ConvertTo-Json | Out-File -FilePath $global:MofConfigPath
+    $global:MofLogPath = $Path
+}
 
 <#
     .SYNOPSIS
@@ -605,11 +684,30 @@ function Test-MofConfig
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     $allResources = Initialize-MofResources -Path $Path -DownloadModules:$DownloadModules -Verbose:$verboseSetting
-    
+    [array]$logObjects = Get-Content -Path $global:MofLogPath -Raw | ConvertFrom-Json
+
     foreach ($resource in $allResources)
     {
-        Test-MofResource -Resource $resource -Verbose:$verboseSetting
+        $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+        $currentLogObject = $logObjects.Where({$_.ResourceId -eq $resource.ResourceId})
+
+        if ($currentLogObject)
+        {
+            # Carry over unmodified properties from logs
+            $result.LastSet = $currentLogObject.LastSet
+            $result.Mode = $currentLogObject.Mode
+            $result.Exception = $currentLogObject.Exception
+            
+            # Remove stale log entry
+            $logObjects = $logObjects.Where({$_.ResourceId -ne $result.ResourceId})
+        }
+        
+        # Add new object to log stack
+        $logObjects += $result
     }
+
+    # Write log to file
+    $logObjects | ConvertTo-Json -Depth 4 | Out-File -FilePath $global:MofLogPath -Force
 }
 
 <#
@@ -653,19 +751,30 @@ function Assert-MofConfig
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     $allResources = Initialize-MofResources -Path $Path -DownloadModules:$DownloadModules
+    [array]$logObjects = Get-Content -Path $global:MofLogPath -Raw | ConvertFrom-Json
 
     foreach ($resource in $allResources)
     {
         Write-Verbose -Message ($LocalizedData.MonitorOnlyResource -f $resource.ResourceID)
         $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-        if(-not $MonitorResources -or $MonitorResources.ResourceID -notcontains $resource.ResourceID)
+
+        if($resource.Mode -eq 'ApplyAndAutoCorrect' -and -not $result.InDesiredState)
         {
-            if (-not $result)
-            {
-                Set-MofResource -Resource $resource -Verbose:$verboseSetting
-            }
+                $result = Set-MofResource -Resource $result -Verbose:$verboseSetting
         }
+
+        $currentLogObject = $logObjects.Where({$_.ResourceId -eq $resource.ResourceId})
+        if ($currentLogObject)
+        {
+            # Remove stale log entry
+            $logObjects = $logObjects.Where({$_.ResourceId -ne $result.ResourceId})
+        }
+        
+        # Add new object to log stack
+        $logObjects += $result
     }
+
+    $logObjects | ConvertTo-Json -Depth 4 | Out-File -FilePath $global:MofLogPath -Force
 }
 
-Export-ModuleMember -Function Assert-MofConfig, Test-MofConfig, Get-MofResources
+Export-ModuleMember -Function Assert-MofConfig, Test-MofConfig, Get-MofResources, Set-MofLogPath
