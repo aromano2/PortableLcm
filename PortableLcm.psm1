@@ -59,6 +59,24 @@ class Resource
         $this.Properties = [hashtable]::new()
     }
 
+    Resource([PSCustomObject]$InputObject)
+    {
+        foreach ($property in ($InputObject.PSObject.Properties))
+        {
+            switch ($property.Name)
+            {
+                Property
+                {
+                    $properties = @{}
+                    $InputObject.Property.PSObject.Properties | ForEach-Object { $properties[$_.Name] = $_.Value }
+                    $this.Property = $properties
+                }
+                
+                default {$this.$($property.Name) = $property.Value}
+            }
+        }
+    }
+
     Resource([String]$ResourceName, [string]$ResourceId , [string]$MofFile, [String]$ModuleName, [String]$ModuleVersion, [hashtable]$Properties)
     {
         $this.Name           = $ResourceName
@@ -67,21 +85,6 @@ class Resource
         $this.ModuleName     = $ModuleName
         $this.ModuleVersion  = $ModuleVersion
         $this.Property       = $Properties
-    }
-
-    Resource([String]$ResourceName, [string]$ResourceId , [string]$MofFile, [String]$ModuleName, [String]$ModuleVersion, [hashtable]$Properties, [bool] $InDesiredState, [string]$Exception, [string]$LastSet, [string]$LastTest, [string]$Mode)
-    {
-        $this.Name           = $ResourceName
-        $this.ResourceId     = $ResourceId
-        $this.MofFile        = $MofFile
-        $this.ModuleName     = $ModuleName
-        $this.ModuleVersion  = $ModuleVersion
-        $this.Property       = $Properties
-        $this.InDesiredState = $InDesiredState
-        $this.Exception      = $Exception
-        $this.LastSet        = $LastSet
-        $this.LastTest       = $LastTest
-        $this.Mode           = $Mode
     }
 }
 
@@ -348,14 +351,27 @@ function Import-TempFunction
         $ResourceName
     )
 
+    $progPref = $ProgressPreference
+    $global:ProgressPreference = 'SilentlyContinue'
     $functionName = "$Operation-TargetResource"
     $tempFunctionName = $functionName.Replace("-", "-$ResourceName")
-    $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
-    if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
+    try
     {
-        Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
+        $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
+        if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
+        {
+            Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
+        }
     }
-    
+    catch
+    {
+        throw $_.Exception
+    }
+    finally
+    {
+        $global:ProgressPreference = $progPref
+    }
+        
     return @{
         Name = $tempFunctionName
         Path = $dscResource.Path
@@ -639,7 +655,7 @@ function Get-MofResources
             
             foreach ($jsonResource in $jsonResources)
             {
-                $resources += [Resource]::new($jsonResource.Name, $jsonResource.ResourceId, $jsonResource.MofFile, $jsonResource.ModuleName, $jsonResource.ModuleVersion, $jsonResource.Property, $jsonResource.InDesiredState, $jsonResource.Exception, $jsonResource.LastSet, $jsonResource.LastTest, $jsonResource.Mode)
+                $resources += [Resource]::new($jsonResource)
             }
             $resources += $jsonResources
         }
@@ -704,8 +720,11 @@ function Test-DscMofConfig
         }
     }
 
+    $count = 0
     foreach ($resource in $allResources)
     {
+        $count++
+        Write-Progress -Activity "$count of $($allResources.Count), $(($count/$($allResources.Count)).ToString('P'))" -Status "$($resource.ResourceId)" -PercentComplete ($count/$($allResources.Count))
         $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
         if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
         {
@@ -730,28 +749,19 @@ function Test-DscMofConfig
         }
     }
 
+    Write-Progress -Completed -Activity 'Completed'
     return $output
 }
 
 <#
     .SYNOPSIS
-        Applies configuration from a MOF file. Will not apply configuration to resources specified in MonitorResources.
+        Applies configuration from a MOF file or from stored JSON configuration.
 
     .PARAMETER Path
         Path to the folder containing many MOF files or path to a singular MOF file.
 
-    .PARAMETER MonitorResources
-        Resources that have been applied before and will not be changed. Only used with 'ApplyAndMonitor' action.
-
     .EXAMPLE
         Assert-DscMofConfig -Path C:\temp\file.mof
-
-    .EXAMPLE
-        $monitor = [Resource]::new("MyFileResource", "ResourceId", "C:\temp\file.mof", "MyModuleName", "MyModuleVersion", @{Property1 = 2}, $false)
-        Assert-DscMofConfig -Path C:\temp\file.mof -MonitorResources $monitorResources
-
-        This example will enforce the configuration from file.mof with exception to the resource named MyFileResource. Even though it is not in desired
-        state, it will not enforce its desired state.
 #>
 function Assert-DscMofConfig
 {
@@ -780,12 +790,15 @@ function Assert-DscMofConfig
     }
 
     $resourceGroups = $allResources | Group-Object -Property 'Name'
+    $count = 0
     foreach ($resourceGroup in $resourceGroups)
     {
         $group = $resourceGroup.Group
         $output = @()
         foreach($resource in $group)
         {
+            $count++
+            Write-Progress -Activity "$count of $($allResources.Count), $(($count/$($allResources.Count)).ToString('P'))" -Status "$($resource.ResourceId)" -PercentComplete ($count/$($allResources.Count))
             $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
             if($group.Mode -eq 'ApplyAndAutoCorrect' -and -not $result.InDesiredState)
             {
@@ -799,6 +812,8 @@ function Assert-DscMofConfig
         $output | ConvertTo-Json -Depth 4 | Out-File -FilePath $jsonPath -Force
         Write-Output -InputObject $output
     }
+
+    Write-Progress -Completed -Activity 'Complete'
 }
 
 function Get-DscMofConfig
