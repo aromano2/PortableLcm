@@ -876,40 +876,52 @@ function Get-DscMofStatus
     }
     process
     {
-        $status = @()
+        $overallStatus = @()
         $configurations = (Get-DscMofConfig).Configurations
         if ($Name)
         {
             $configuration = $configurations.Where({$_.Name -eq $Name})
-            $status += (Get-Content -Path $configuration.JsonPath | ConvertFrom-Json -WarningAction 'SilentlyContinue')
+            $configurationStatus = (Get-Content -Path $configuration.JsonPath | ConvertFrom-Json -WarningAction 'SilentlyContinue')
             if (-not $Full)
             {
                 $properties = [ordered]@{
-                    Name = $Name
+                    Name = $configurationStatus.MofFile | Select-Object -First 1
                     InDesiredState = ($status.InDesiredState -notcontains $false)
                 }
 
-                return (New-Object -TypeName 'PSObject' -Property $properties)
+                New-Object -TypeName 'PSObject' -Property $properties
+            }
+            else
+            {
+                $overallStatus += $configurationStatus
             }
         }
         else
         {
             foreach ($configuration in $configurations)
             {
-                $status += Get-Content -Path $configuration.JsonPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
+                $configurationStatus = Get-Content -Path $configuration.JsonPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
                 if (-not $Full)
                 {
                     $properties = [ordered]@{
-                        Name = $Name
+                        Name = $configurationStatus.MofFile | Select-Object -First 1
                         InDesiredState = ($status.InDesiredState -notcontains $false)
                     }
 
-                    Write-Output -InputObject (New-Object -TypeName 'PSObject' -Property $properties)
+                    New-Object -TypeName 'PSObject' -Property $properties
                 }
+                else
+                {
+                    $overallStatus += $configurationStatus
+                }
+
             }
         }
 
-        return $status
+        if ($Full)
+        {
+            return $overallStatus
+        }
     }
 }
 
