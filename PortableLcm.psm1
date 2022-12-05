@@ -5,6 +5,7 @@ data LocalizedData
     ContainerDetected = Folder detected for path '{0}'.
     FoundResources = Found {0} resources in file {1}.
     ModulePresent = Module '{0}' with version '{1}' is present.
+    InstallModule = Installing module '{0}' version '{1}' to scope '{2}'.
     MandatoryParameter = Parameter '{0}' is mandatory.
     ModuleNotPresent = Module '{0}-{1}' not present. '{2}' resources from '{3}' will not be applied.
     ParametersValidated = Parameters for resource '{0}' passed validation.
@@ -15,7 +16,6 @@ data LocalizedData
     ResourceInDesiredState = Resource '{0}' is in desired state.
     TestException = Exception thrown: {0}.
     MonitorOnlyResource = Resource '{0}' is set to monitor only. Set will be skipped.
-    GetModule = Installing module '{0}:{1}'.
     JsonExists = JSON file '{0}' already exists. Use Force switch to overwrite.
     MofDoesNotExist = Publishing new MOF config '{0}' with hash '{1}'.
     HashMismatch = Hash mismatch for MOF '{0}'. Current hash: '{1}'. New hash: '{2}'. Overwriting existing configuration.
@@ -68,90 +68,27 @@ class Resource
         $this.ModuleVersion  = $ModuleVersion
         $this.Property       = $Properties
     }
+
+    Resource([String]$ResourceName, [string]$ResourceId , [string]$MofFile, [String]$ModuleName, [String]$ModuleVersion, [hashtable]$Properties, [bool] $InDesiredState, [string]$Exception, [string]$LastSet, [string]$LastTest, [string]$Mode)
+    {
+        $this.Name           = $ResourceName
+        $this.ResourceId     = $ResourceId
+        $this.MofFile        = $MofFile
+        $this.ModuleName     = $ModuleName
+        $this.ModuleVersion  = $ModuleVersion
+        $this.Property       = $Properties
+        $this.InDesiredState = $InDesiredState
+        $this.Exception      = $Exception
+        $this.LastSet        = $LastSet
+        $this.LastTest       = $LastTest
+        $this.Mode           = $Mode
+    }
 }
 
 #region Helpers
 function Get-TimeStamp
 {
     return Get-Date -Format 'MM/dd/yy hh:mm:ss'
-}
-
-<#
-    .SYNOPSIS
-        Imports resources from MOF file and converts them to resource objects.
-
-    .PARAMETER Path
-        Path to the folder containing many MOF files or path to a singular MOF file.
-
-    .PARAMETER
-        Optionally download modules required by the MOF resources.
-
-    .EXAMPLE
-        Initialize-MofResources -Path C:\test\test.mof -DownloadModules
-#>
-function Initialize-MofResources
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(Mandatory = $true)]
-        [string]
-        $Path,
-
-        [Parameter()]
-        [switch]
-        $DownloadModules
-    )
-
-    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    $allResources = Get-MofResources -Path $Path
-    $groupResources = $allResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
-    foreach ($groupResource in $groupResources)
-    {
-        $group = $groupResource.Group
-        $moduleName = $group.ModuleName | Select-Object -First 1
-        $moduleVersion = $group.ModuleVersion | Select-Object -First 1
-
-        if(-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
-        {
-            if ($DownloadModules)
-            {
-                Write-Verbose -Message ($LocalizedData.GetModule -f $moduleName, $moduleVersion)
-                $null = Install-Module -Name $moduleName -RequiredVersion $moduleVersion -AllowClobber -Force -Verbose:$verboseSetting
-            }
-
-            Write-Warning -Message $($LocalizedData.ModuleNotPresent -f $moduleName, $moduleVersion, $group.Count, $Path)
-
-            foreach ($missingResource in $group)
-            {
-                $allResources = $allResources.Where({$_.ResourceId -eq $missingResource.ResourceID})
-            }
-        }
-    }
-
-    return $allResources
-}
-
-function Update-MofResourceLog
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(Mandatory = $true)]
-        [Resource]
-        $Resource,
-
-        [Parameter()]
-        [ValidateScript({-not [string]::IsNullOrEmpty($_)})]
-        [Newtonsoft.Json.Linq.JArray]
-        $JsonLog
-    )
-
-    if ($JsonLog)
-    {
-
-    }
-
 }
 
 <#
@@ -332,9 +269,9 @@ function Test-ModulePresent
             DependsOn            = ''
         }
 
-        Test-Parameter -Name 'Test-RegistryPolicyFileTargetResource' -Values $properties
+        Merge-MofResourceParameter -Name 'Test-RegistryPolicyFileTargetResource' -Values $properties
 #>
-function Test-Parameter
+function Merge-MofResourceParameter
 {
     [CmdletBinding()]
     param
@@ -469,7 +406,7 @@ function Test-MofResource
         if (Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Property)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Test-Parameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
+            $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Test', $Resource.Name)
             try
             {
@@ -553,7 +490,7 @@ function Set-MofResource
         if(Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Property)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Test-Parameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
+            $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
             Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.ResourceName)
 
             try
@@ -584,219 +521,6 @@ function Set-MofResource
         Remove-Module -FullyQualifiedName $tempFunction.Path
     }
 }
-#endregion Helpers
-
-function Set-MofLogPath
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(Mandatory = $true)]
-        [ValidateScript({[System.IO.Path]::GetExtension($_) -eq '.json'})]
-        [string]
-        $Path
-    )
-
-    if (-not (Test-Path -Path $Path))
-    {
-        $null = New-Item -Path $Path -ItemType 'File'
-    }
-
-    $null = @{ LogPath = $Path } | ConvertTo-Json | Out-File -FilePath $global:MofConfigPath
-    $global:MofLogPath = $Path
-}
-
-<#
-    .SYNOPSIS
-        Returns all resources in a MOF file as a resource object.
-
-    .PARAMETER Path
-        Path to the folder containing many MOF files or path to a singular MOF file
-
-    .EXAMPLE
-        Get-MofResources -Path C:\temp\file.mof
-#>
-function Get-MofResources
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
-        [string]
-        $Path
-    )
-
-    if (Test-Path -Path $Path -PathType 'Container')
-    {
-        Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
-        $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
-        $jsonFiles = (Get-ChildItem -Path $Path -Include "*.json" -Recurse).FullName
-    }
-    else
-    {
-        $mofFiles, $jsonFiles = $path
-    }
-
-    try
-    {
-        $resources = @()
-        foreach ($jsonFile in $jsonFiles)
-        {
-            $jsonResources = Get-Content -Path $jsonFile | ConvertFrom-Json
-            Write-Verbose -Message $($LocalizedData.FoundResources -f $jsonResources.Count, $jsonFile)
-
-            $resources += $jsonResources
-        }
-
-        foreach ($mofFile in $mofFiles)
-        {
-            $mofResources = ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($mofFile, 4)).Where({-not [string]::IsNullOrEmpty($_.ModuleName)})
-            Write-Verbose -Message $($LocalizedData.FoundResources -f $mofResources.Count, $mofFile)
-            
-            foreach ($resource in $mofResources)
-            {
-                $resources += Convert-MofResource -Resource $resource -MofFile $mofFile
-            }
-        }
-
-        return $resources
-    }
-    catch
-    {
-        throw $_.Exception
-    }
-    finally
-    {
-        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
-    }
-}
-
-<#
-    .SYNOPSIS 
-        Tests resource states defined in a MOF file.
-
-    .PARAMETER Path
-        Path to the folder containing many MOF files or path to a singular MOF file
-
-    .EXAMPLE
-        Test-MofConfig -Path C:\temp\file.mof -Operation Get
-#>
-function Test-MofConfig
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
-        [string]
-        $Path,
-
-        [Parameter()]
-        [switch]
-        $DownloadModules
-    )
-
-    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    $allResources = Import-MofConfig -Path $Path -DownloadModules:$DownloadModules -Verbose:$verboseSetting
-    [array]$logObjects = Get-Content -Path $global:MofLogPath -Raw | ConvertFrom-Json
-
-    foreach ($resource in $allResources)
-    {
-        $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-        $currentLogObject = $logObjects.Where({$_.ResourceId -eq $resource.ResourceId})
-
-        if ($currentLogObject)
-        {
-            # Carry over unmodified properties from logs
-            $result.LastSet = $currentLogObject.LastSet
-            $result.Mode = $currentLogObject.Mode
-            $result.Exception = $currentLogObject.Exception
-            
-            # Remove stale log entry
-            $logObjects = $logObjects.Where({$_.ResourceId -ne $result.ResourceId})
-        }
-        
-        # Add new object to log stack
-        $logObjects += $result
-    }
-
-    # Write log to file
-    $logObjects | ConvertTo-Json -Depth 4 | Out-File -FilePath $global:MofLogPath -Force
-}
-
-<#
-    .SYNOPSIS
-        Applies configuration from a MOF file. Will not apply configuration to resources specified in MonitorResources.
-
-    .PARAMETER Path
-        Path to the folder containing many MOF files or path to a singular MOF file.
-
-    .PARAMETER MonitorResources
-        Resources that have been applied before and will not be changed. Only used with 'ApplyAndMonitor' action.
-
-    .EXAMPLE
-        Assert-MofConfig -Path C:\temp\file.mof
-
-    .EXAMPLE
-        $monitor = [Resource]::new("MyFileResource", "ResourceId", "C:\temp\file.mof", "MyModuleName", "MyModuleVersion", @{Property1 = 2}, $false)
-        Assert-MofConfig -Path C:\temp\file.mof -MonitorResources $monitorResources
-
-        This example will enforce the configuration from file.mof with exception to the resource named MyFileResource. Even though it is not in desired
-        state, it will not enforce its desired state.
-#>
-function Assert-MofConfig
-{
-    [CmdletBinding()]
-    param
-    (
-        [Parameter(ParameterSetName = 'ByFile', Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
-        [ValidateScript({@('.mof','.json') -contains [System.IO.Path]::GetExtension($_)})]
-        [string]
-        $Path,
-
-        [Parameter(ParameterSetName = 'ByObject', Mandatory = $true, ValueFromPipeline = $true)]
-        [psobject]
-        $InputObject,
-
-        [Parameter()]
-        [Resource[]]
-        $MonitorResources,
-
-        [Parameter()]
-        [switch]
-        $DownloadModules
-    )
-
-    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    $allResources = Import-MofConfig -Path $Path -DownloadModules:$DownloadModules
-    [array]$logObjects = Get-Content -Path $global:MofLogPath -Raw | ConvertFrom-Json
-
-    foreach ($resource in $allResources)
-    {
-        Write-Verbose -Message ($LocalizedData.MonitorOnlyResource -f $resource.ResourceID)
-        $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-
-        if($resource.Mode -eq 'ApplyAndAutoCorrect' -and -not $result.InDesiredState)
-        {
-                $result = Set-MofResource -Resource $result -Verbose:$verboseSetting
-        }
-
-        $currentLogObject = $logObjects.Where({$_.ResourceId -eq $resource.ResourceId})
-        if ($currentLogObject)
-        {
-            # Remove stale log entry
-            $logObjects = $logObjects.Where({$_.ResourceId -ne $result.ResourceId})
-        }
-        
-        # Add new object to log stack
-        $logObjects += $result
-    }
-
-    $logObjects | ConvertTo-Json -Depth 4 | Out-File -FilePath $global:MofLogPath -Force
-    return $logObjects
-}
 
 <#
     .SYNOPSIS
@@ -815,9 +539,9 @@ function Assert-MofConfig
         Forces the overwrite of an existing JSON file.
 
     .EXAMPLE
-        Import-MofConfig -MofPath C:\test\test.mof -JsonPath c:\test\test.json
+        Convert-MofConfig -MofPath C:\test\test.mof -JsonPath c:\test\test.json
 #>
-function Import-MofConfig
+function Convert-MofConfig
 {
     [CmdletBinding()]
     param
@@ -866,6 +590,216 @@ function Import-MofConfig
 
     return $allResources
 }
+#endregion Helpers
+
+#region Public
+<#
+    .SYNOPSIS
+        Returns all resources in a MOF file as a resource object.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file
+
+    .EXAMPLE
+        Get-MofResources -Path C:\temp\file.mof
+#>
+function Get-MofResources
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path
+    )
+
+    if (Test-Path -Path $Path -PathType 'Container')
+    {
+        Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
+        $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
+        $jsonFiles = (Get-ChildItem -Path $Path -Include "*.json" -Recurse).FullName
+    }
+    else
+    {
+        switch ([System.IO.Path]::GetExtension($Path))
+        {
+            '.mof' {$mofFiles = $Path}
+            '.json' {$jsonFiles = $Path}
+        }
+    }
+
+    try
+    {
+        $resources = @()
+        foreach ($jsonFile in $jsonFiles)
+        {
+            $jsonResources = Get-Content -Path $jsonFile | ConvertFrom-Json
+            Write-Verbose -Message $($LocalizedData.FoundResources -f $jsonResources.Count, $jsonFile)
+            
+            foreach ($jsonResource in $jsonResources)
+            {
+                $resources += [Resource]::new($jsonResource.Name, $jsonResource.ResourceId, $jsonResource.MofFile, $jsonResource.ModuleName, $jsonResource.ModuleVersion, $jsonResource.Property, $jsonResource.InDesiredState, $jsonResource.Exception, $jsonResource.LastSet, $jsonResource.LastTest, $jsonResource.Mode)
+            }
+            $resources += $jsonResources
+        }
+
+        foreach ($mofFile in $mofFiles)
+        {
+            $mofResources = ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($mofFile, 4)).Where({-not [string]::IsNullOrEmpty($_.ModuleName)})
+            Write-Verbose -Message $($LocalizedData.FoundResources -f $mofResources.Count, $mofFile)
+            
+            foreach ($resource in $mofResources)
+            {
+                $resources += Convert-MofResource -Resource $resource -MofFile $mofFile
+            }
+        }
+
+        return $resources
+    }
+    catch
+    {
+        throw $_.Exception
+    }
+    finally
+    {
+        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
+    }
+}
+
+<#
+    .SYNOPSIS 
+        Tests resource states defined in a MOF file or local configuration.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file
+
+    .EXAMPLE
+        Test-DscMofConfig -Path C:\temp\file.mof
+#>
+function Test-DscMofConfig
+{
+    [CmdletBinding(DefaultParameterSetName = 'ByConfiguration')]
+    param
+    (
+        [Parameter(ParameterSetName = 'ByFile')]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path
+    )
+
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+    $output = @()
+    $allResources = @()
+    if ($PSCmdlet.ParameterSetName -eq 'ByFile')
+    {
+        $allResources = Get-MofResources -Path $Path
+    }
+    else
+    {
+        $configurations = (Get-DscMofConfig).Configurations
+        foreach($configuration in $configurations)
+        {
+            $allResources += Get-MofResources -Path $configuration.JsonPath
+        }
+    }
+
+    foreach ($resource in $allResources)
+    {
+        $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+        if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+        {
+            # Carry over unmodified properties from config
+            $result.LastSet = $resource.LastSet
+            $result.Mode = $resource.Mode
+            $result.Exception = $resource.Exception
+        }
+        
+        # Add new object to config stack
+        $output += $result
+    }
+
+    # Write log to file
+    if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+    {
+        $outputGroups = $output | Group-Object -Property 'JsonPath'
+        foreach ($outputGroup in $outputGroups)
+        {
+            $groupPath = $outputGroup.Group.JsonPath | Select-Object -First 1
+            $outputGroup.Group | ConvertTo-Json -Depth 4 | Out-File -FilePath $groupPath -Force
+        }
+    }
+
+    return $output
+}
+
+<#
+    .SYNOPSIS
+        Applies configuration from a MOF file. Will not apply configuration to resources specified in MonitorResources.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file.
+
+    .PARAMETER MonitorResources
+        Resources that have been applied before and will not be changed. Only used with 'ApplyAndMonitor' action.
+
+    .EXAMPLE
+        Assert-DscMofConfig -Path C:\temp\file.mof
+
+    .EXAMPLE
+        $monitor = [Resource]::new("MyFileResource", "ResourceId", "C:\temp\file.mof", "MyModuleName", "MyModuleVersion", @{Property1 = 2}, $false)
+        Assert-DscMofConfig -Path C:\temp\file.mof -MonitorResources $monitorResources
+
+        This example will enforce the configuration from file.mof with exception to the resource named MyFileResource. Even though it is not in desired
+        state, it will not enforce its desired state.
+#>
+function Assert-DscMofConfig
+{
+    [CmdletBinding(DefaultParameterSetName = 'ByConfiguration')]
+    param
+    (
+        [Parameter(ParameterSetName = 'ByFile')]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path
+    )
+
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+    $allResources = @()
+    if ($PSCmdlet.ParameterSetName -eq 'ByFile')
+    {
+        $allResources = Get-MofResources -Path $Path
+    }
+    else
+    {
+        $configurations = (Get-DscMofConfig).Configurations
+        foreach($configuration in $configurations)
+        {
+            $allResources += Get-MofResources -Path $configuration.JsonPath
+        }
+    }
+
+    $resourceGroups = $allResources | Group-Object -Property 'Name'
+    foreach ($resourceGroup in $resourceGroups)
+    {
+        $group = $resourceGroup.Group
+        $output = @()
+        foreach($resource in $group)
+        {
+            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+            if($group.Mode -eq 'ApplyAndAutoCorrect' -and -not $result.InDesiredState)
+            {
+                $result = Set-MofResource -Resource $result -Verbose:$verboseSetting
+            }
+
+            $output += $result
+        }
+
+        $jsonPath = $group.JsonPath | Select-Object -First 1
+        $output | ConvertTo-Json -Depth 4 | Out-File -FilePath $jsonPath -Force
+        Write-Output -InputObject $output
+    }
+}
 
 function Get-DscMofConfig
 {
@@ -901,6 +835,7 @@ function Get-DscMofStatus
         [switch]
         $Full
     )
+
     DynamicParam
     {
         $configurations = (Get-DscMofConfig).Configurations
@@ -963,6 +898,64 @@ function Get-DscMofStatus
     }
 }
 
+function Install-DscMofModules
+{
+    [CmdletBinding(DefaultParameterSetName = 'ByConfiguration')]
+    param
+    (
+        [Parameter(ParameterSetName = 'ByFile')]
+        [ValidateScript({Test-Path -Path $_})]
+        [string]
+        $Path,
+
+        [Parameter(ParameterSetName = 'ByFile')]
+        [Parameter(ParameterSetName = 'ByConfiguration')]
+        [ValidateSet('AllUsers', 'CurrentUser')]
+        [string]
+        $Scope = 'CurrentUser'
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'ByFile')
+    {
+        if (-not [string]::IsNullOrEmpty($Path) -and (Test-Path -Path $Path -PathType 'Container'))
+        {
+            Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
+            $configFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
+        }
+        elseif (-not [string]::IsNullOrEmpty($Path))
+        {
+            $configFiles = $Path
+        }
+    }
+    elseif ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+    {
+        $configFiles = (Get-DscMofConfig).Configurations.JsonPath
+    }
+    else
+    {
+        throw 'error'
+    }
+
+    $configResources = @()
+    foreach ($configFile in $configFiles)
+    {
+        $configResources += Get-MofResources -Path $configFile            
+    }
+
+    $moduleGroups = $configResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
+    foreach ($moduleGroup in $moduleGroups)
+    {
+        $group = $moduleGroup.Group
+        $moduleName = $group.ModuleName | Select-Object -First 1
+        $moduleVersion = $group.ModuleVersion | Select-Object -First 1
+        if(-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
+        {
+            Write-Verbose -Message $($LocalizedData.InstallModule -f $moduleName, $moduleVersion, $Scope)
+            #Install-Module -Name $moduleName -RequiredVersion $moduleVersion -Scope $Scope -Verbose:$false
+        }
+    }
+}
+
 <#
     .SYNOPSIS
         Publishes MOF file(s) to its internal configuration.
@@ -974,9 +967,9 @@ function Get-DscMofStatus
         Mode to apply to MOF file(s): ApplyAndMointor (default) or ApplyAndAutoCorrect
 
     .EXAMPLE
-        Publish-DscMof -Path c:\temp\myMof.mof
+        Publish-DscMofConfig -Path c:\temp\myMof.mof
 #>
-function Publish-DscMof
+function Publish-DscMofConfig
 {
     [CmdletBinding()]
     param
@@ -1038,7 +1031,7 @@ function Publish-DscMof
                 if ($existingConfig.Count -eq 0)
                 {
                     Write-Verbose -Message ($LocalizedData.MofDoesNotExist -f $mofName, $hash)
-                    $mofResources = Import-MofConfig -MofPath $mofFile -JsonPath $jsonPath -Mode $Mode -Force
+                    $mofResources = Convert-MofConfig -MofPath $mofFile -JsonPath $jsonPath -Mode $Mode -Force
                     $properties.ResourceCount = $mofResources.Count
                     $configurations += $properties
                 }
@@ -1054,7 +1047,7 @@ function Publish-DscMof
                         Write-Verbose -Message ($LocalizedData.MissingJson -f $mofName, $jsonPath)
                     }
 
-                    $mofResources = Import-MofConfig -MofPath $mofFile -JsonPath $jsonPath -Mode $Mode -Force
+                    $mofResources = Convert-MofConfig -MofPath $mofFile -JsonPath $jsonPath -Mode $Mode -Force
                     $allResources += $mofResources
                     $properties.ResourceCount = $mofResources.Count    
                 }
@@ -1072,4 +1065,4 @@ function Publish-DscMof
     $tempConfig | ConvertTo-Json -Depth 4 -WarningAction 'SilentlyContinue' | Out-File -FilePath $MofConfigPath
 }
 
-Export-ModuleMember -Function Assert-MofConfig, Test-MofConfig, Get-MofResources, Set-MofLogPath, Import-MofConfig, Publish-DscMof, Get-DscMofConfig, Get-DscMofStatus
+Export-ModuleMember -Function Assert-DscMofConfig, Test-DscMofConfig, Get-MofResources, Convert-MofConfig, Publish-DscMofConfig, Get-DscMofConfig, Get-DscMofStatus, Install-DscMofModules
