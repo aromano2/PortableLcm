@@ -1,0 +1,13 @@
+{
+  "Configurations": [
+    {
+      "JsonPath": "C:\\Repos\\PortableLcm\\powerstig.json",
+      "Hash": "3C00FBDBC4C4D608F2C6E510CC4A9904",
+      "Name": "powerstig",
+      "ResourceCount": 590,
+      "MofPath": "C:\\Repos\\PortableLcm\\powerstig.mof",
+      "Mode": "ApplyAndMonitor"
+    }
+  ],
+  "LogPath": "C:\\Repos\\PortableLcm\\Logs\\log.json"
+}

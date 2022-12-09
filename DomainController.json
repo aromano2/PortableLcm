@@ -1,0 +1,297 @@
+[
+  {
+    "Name": "WindowsFeature",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[WindowsFeature]ADDSInstall",
+    "ModuleName": "PSDesiredStateConfiguration",
+    "ModuleVersion": "1.1",
+    "Property": {
+      "Ensure": "Present",
+      "Name": "AD-Domain-Services"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": null
+  },
+  {
+    "Name": "WindowsFeature",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[WindowsFeature]RSAT-AD-AdminCenter",
+    "ModuleName": "PSDesiredStateConfiguration",
+    "ModuleVersion": "1.1",
+    "Property": {
+      "Ensure": "Present",
+      "Name": "RSAT-AD-AdminCenter"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[WindowsFeature]ADDSInstall"
+    ]
+  },
+  {
+    "Name": "WindowsFeature",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[WindowsFeature]RSAT-ADDS-Tools",
+    "ModuleName": "PSDesiredStateConfiguration",
+    "ModuleVersion": "1.1",
+    "Property": {
+      "Ensure": "Present",
+      "Name": "RSAT-ADDS-Tools"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[WindowsFeature]ADDSInstall"
+    ]
+  },
+  {
+    "Name": "WindowsFeature",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[WindowsFeature]RSAT-DNS-Server",
+    "ModuleName": "PSDesiredStateConfiguration",
+    "ModuleVersion": "1.1",
+    "Property": {
+      "Ensure": "Present",
+      "Name": "RSAT-DNS-Server"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[WindowsFeature]ADDSInstall"
+    ]
+  },
+  {
+    "Name": "xADDomain",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[xADDomain]unit",
+    "ModuleName": "xActiveDirectory",
+    "ModuleVersion": "2.22.0.0",
+    "Property": {
+      "DomainAdministratorCredential": {
+        "CimClass": {
+          "CimSuperClassName": null,
+          "CimSuperClass": null,
+          "CimClassProperties": "Password UserName",
+          "CimClassQualifiers": "",
+          "CimClassMethods": "",
+          "CimSystemProperties": "Microsoft.Management.Infrastructure.CimSystemProperties"
+        },
+        "CimInstanceProperties": [
+          "Password = \"-----BEGIN CMS-----?MIIBqwYJKoZIhvcNAQc...",
+          "UserName = \"Unit\\Administrator\""
+        ],
+        "CimSystemProperties": {
+          "Namespace": null,
+          "ServerName": null,
+          "ClassName": "MSFT_Credential",
+          "Path": null
+        }
+      },
+      "DatabasePath": "C:\\Windows\\NTDS",
+      "SysvolPath": "C:\\Windows\\Sysvol",
+      "DomainName": "unit.domain",
+      "SafemodeAdministratorPassword": {
+        "CimClass": {
+          "CimSuperClassName": null,
+          "CimSuperClass": null,
+          "CimClassProperties": "Password UserName",
+          "CimClassQualifiers": "",
+          "CimClassMethods": "",
+          "CimSystemProperties": "Microsoft.Management.Infrastructure.CimSystemProperties"
+        },
+        "CimInstanceProperties": [
+          "Password = \"-----BEGIN CMS-----?MIIBqwYJKoZIhvcNAQc...",
+          "UserName = \"AD\\Administrator\""
+        ],
+        "CimSystemProperties": {
+          "Namespace": null,
+          "ServerName": null,
+          "ClassName": "MSFT_Credential",
+          "Path": null
+        }
+      },
+      "DomainNetbiosName": "unit",
+      "LogPath": "C:\\Windows\\NTDS"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[WindowsFeature]ADDSInstall"
+    ]
+  },
+  {
+    "Name": "Script",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[Script]DefaultTemplates",
+    "ModuleName": "PSDesiredStateConfiguration",
+    "ModuleVersion": "1.1",
+    "Property": {
+      "GetScript": "\n                    $configurationNamingContext = (Get-ADRootDSE).configurationNamingContext\n                    $identity = \"CN=Certificate Templates,CN=Public Key Services,CN=Services,$configurationNamingContext\"\n                    [array]$certDump = Get-ADObject -Filter * -Properties DisplayName -SearchBase $identity\n                    return @{\n                        Result = $certDump.Count-1\n                    }\n                ",
+      "TestScript": "\n                    $configurationNamingContext = (Get-ADRootDSE).configurationNamingContext\n                    $identity = \"CN=Certificate Templates,CN=Public Key Services,CN=Services,$configurationNamingContext\"\n                    [array]$certDump = Get-ADObject -Filter * -Properties DisplayName -SearchBase $identity\n                    return ($certDump.count -gt 30)\n                ",
+      "SetScript": "\n                    $certutilDump = [scriptblock]::Create(\". $env:SystemRoot\\system32\\certutil.exe -installdefaulttemplates\")\n                    $null = Invoke-Command -ScriptBlock $certutilDump\n                "
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[xADDomain]unit"
+    ]
+  },
+  {
+    "Name": "xDnsServerSecondaryZone",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[xDnsServerSecondaryZone]root.local",
+    "ModuleName": "xDnsServer",
+    "ModuleVersion": "1.11.0.0",
+    "Property": {
+      "Name": "root.local",
+      "Ensure": "Present",
+      "MasterServers": [
+        "192.0.0.101"
+      ]
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[xADDomain]unit"
+    ]
+  },
+  {
+    "Name": "xDnsServerSecondaryZone",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[xDnsServerSecondaryZone]rps.local",
+    "ModuleName": "xDnsServer",
+    "ModuleVersion": "1.11.0.0",
+    "Property": {
+      "Name": "rps.local",
+      "Ensure": "Present",
+      "MasterServers": [
+        "192.0.0.201"
+      ]
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[xADDomain]unit"
+    ]
+  },
+  {
+    "Name": "xDnsServerZoneTransfer",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[xDnsServerZoneTransfer]TransferZones",
+    "ModuleName": "xDnsServer",
+    "ModuleVersion": "1.11.0.0",
+    "Property": {
+      "Type": "Specific",
+      "SecondaryServer": [
+        "192.0.0.101",
+        "192.0.0.201",
+        "192.0.0.202",
+        "192.0.0.212"
+      ],
+      "Name": "unit.domain"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": [
+      "[xADDomain]unit"
+    ]
+  },
+  {
+    "Name": "RPS_DynamicPortRange",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[RPS_DynamicPortRange]UDPStig",
+    "ModuleName": "RPS_Networking",
+    "ModuleVersion": "1.0.0.0",
+    "Property": {
+      "Protocol": "udp",
+      "StartPort": 49152,
+      "PortCount": 3000
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": null
+  },
+  {
+    "Name": "RPS_DynamicPortRange",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[RPS_DynamicPortRange]TCPStigDatacenter",
+    "ModuleName": "RPS_Networking",
+    "ModuleVersion": "1.0.0.0",
+    "Property": {
+      "Protocol": "tcpdatacenter",
+      "StartPort": 49152,
+      "PortCount": 3000
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": null
+  },
+  {
+    "Name": "RPS_DynamicPortRange",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[RPS_DynamicPortRange]TCPStigInternet",
+    "ModuleName": "RPS_Networking",
+    "ModuleVersion": "1.0.0.0",
+    "Property": {
+      "Protocol": "tcpinternet",
+      "StartPort": 49152,
+      "PortCount": 3000
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": null
+  },
+  {
+    "Name": "UdpPortLeakFix",
+    "MofFile": "C:\\Repos\\PortableLcm\\DomainController.mof",
+    "ResourceId": "[UdpPortLeakFix]Install",
+    "ModuleName": "MN_GpoManagementDsc",
+    "ModuleVersion": "1.1.0.0",
+    "Property": {
+      "Ensure": "Present"
+    },
+    "InDesiredState": false,
+    "Exception": null,
+    "LastSet": null,
+    "LastTest": null,
+    "Mode": "ApplyAndMonitor",
+    "DependsOn": null
+  }
+]

@@ -64,24 +64,27 @@ class Resource
     [string] $LastSet
     [string] $LastTest
     [string] $Mode
+    [string] $DependsOn
     [hashtable] $Properties
 
-    Resource([string]$ResourceId, [string]$Type, [String]$ModuleName, [String]$ModuleVersion, [string]$Mode)
+    Resource([string]$ResourceId, [string]$Type, [String]$ModuleName, [String]$ModuleVersion, [string]$Mode, [string]$DependsOn)
     {
         $this.ResourceId     = $ResourceId
         $this.Type           = $Type
         $this.ModuleName     = $ModuleName
         $this.ModuleVersion  = $ModuleVersion
         $this.Mode           = $Mode
+        $this.DependsOn      = $DependsOn
     }
 
-    Resource([string]$ResourceId, [string]$Type, [String]$ModuleName, [String]$ModuleVersion, [string]$Mode, [hashtable]$Properties)
+    Resource([string]$ResourceId, [string]$Type, [String]$ModuleName, [String]$ModuleVersion, [string]$Mode, [string]$DependsOn, [hashtable]$Properties)
     {
         $this.ResourceId     = $ResourceId
         $this.Type           = $Type
         $this.ModuleName     = $ModuleName
         $this.ModuleVersion  = $ModuleVersion
         $this.Mode           = $Mode
+        $this.DependsOn      = $DependsOn
         $this.Properties     = $Properties
     }
 }
@@ -151,11 +154,11 @@ function Convert-MofInstance
     if ($IncludeProperties)
     {
         $properties = Get-MofInstanceProperties -Instance $Instance
-        return [Resource]::new($Instance.ResourceID, $type, $Instance.ModuleName, $Instance.ModuleVersion, $Mode, $properties)
+        return [Resource]::new($Instance.ResourceID, $type, $Instance.ModuleName, $Instance.ModuleVersion, $Mode, $Instance.DependsOn, $properties)
     }
     else
     {
-        return [Resource]::new($Instance.ResourceID, $type, $Instance.ModuleName, $Instance.ModuleVersion, $Mode)
+        return [Resource]::new($Instance.ResourceID, $type, $Instance.ModuleName, $Instance.ModuleVersion, $Mode, $Instance.DependsOn)
     }
 }
 

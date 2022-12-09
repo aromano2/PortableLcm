@@ -20,6 +20,24 @@ ResourceID = "[UserRightsAssignment][V-26473][medium][Allow log on through Remot
  ConfigurationName = "PowerStigConfiguration";
 
 };
+instance of MSFT_RegistryPolicyFile as $MSFT_RegistryPolicyFile2ref
+{
+ResourceID = "[RegistryPolicyFile][V-46475][medium][DTBI015-IE11-Warning of certificate mismatch]::[InternetExplorer]BrowserStig";
+ ValueName = "WarnOnBadCertRecving";
+ Ensure = "Present";
+ Key = "Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+ ValueData = {
+    "1"
+};
+ SourceInfo = "C:\\ContentStore\\DSC\\Modules\\PowerSTIG\\4.3.0\\DSCResources\\Resources\\windows.Registry.ps1::40::13::RegistryPolicyFile";
+ ValueType = "Dword";
+ ModuleName = "GPRegistryPolicyDsc";
+ TargetType = "ComputerConfiguration";
+ ModuleVersion = "1.2.0";
+
+ ConfigurationName = "PowerStigConfiguration";
+
+};
 instance of OMI_ConfigurationDocument
 
 
