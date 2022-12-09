@@ -7,7 +7,7 @@ data LocalizedData
     ModulePresent = Module '{0}' with version '{1}' is present.
     InstallModule = Installing module '{0}' version '{1}' to scope '{2}'.
     MandatoryParameter = Parameter '{0}' is mandatory.
-    ModuleNotPresent = Module '{0}-{1}' not present. '{2}' resources from '{3}' will not be applied.
+    ModuleNotPresent = Module '{0}-{1}' not present. Skipping resource '{2}'.
     ParametersValidated = Parameters for resource '{0}' passed validation.
     ResourceValidated = Resource '{0}' passed validation.
     CallExternalFunction = Calling {0}-TargetResource for resource '{1}'.
@@ -25,6 +25,10 @@ data LocalizedData
     DependencySet = Resource '{0}' dependency '{1}' has been set.
     DependencyNotSet = Resource '{0}' dependency '{1}' has not been set, skipping.
     CopyMof = Copying '{0}' to {1}'.
+    RebootRequiredNotAllowed = A reboot is required to finish applying configuration but reboots are not allowed. 
+    RebootNotRequired = A reboot is not required.
+    Reboot = Rebooting to finish applying configuration.
+    CredentialNotSupported = Credential property detected in resource '{0}'. Credentials are currently not supported. Skipping.
 '@
 }
 
@@ -39,7 +43,13 @@ if (-not (Test-Path -Path $configPath))
         $null = New-Item -Path $configParentPath -ItemType 'Directory'
     }
 
-    $config = @{ Configurations = @() }
+    $config = [ordered]@{
+        Settings = @{
+            AllowReboot = $true
+        }
+        Configurations = @()
+    }
+
     $config | ConvertTo-Json | Out-File -FilePath $configPath
 }
 
@@ -179,6 +189,14 @@ function Get-MofInstanceProperties
             if ($type -eq 'SInt64')
             {
                 $type = 'Long'
+            }
+            elseif ($type -eq 'Instance')
+            {
+                $typeName = ($property.Value | Get-Member).TypeName
+                if ($typeName -contains 'Microsoft.Management.Infrastructure.CimInstance#MSFT_Credential')
+                {
+                    throw ($LocalizedData.CredentialNotSupported -f $Instance.ResourceId)
+                }
             }
 
             $propertyTable[$($property.Name)] = ($property.Value -as ([type]$type))
@@ -401,7 +419,7 @@ function Import-TempFunction
     try
     {
         $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
-        if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue'))
+        if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue') -and $null -ne $dscResource)
         {
             Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
         }
@@ -474,7 +492,7 @@ function Test-MofResource
             }
             catch
             {
-                Write-Error -Message ($LocalizedData.TestException -f $_.Exception)
+                Write-Error -Exception $_.Exception -Message $_.Exception.Message
             }
 
             if ($result)
@@ -499,7 +517,10 @@ function Test-MofResource
     }
     finally
     {
-        Remove-Module -FullyQualifiedName $tempFunction.Path
+        if ($null -ne $tempFunction -and $tempFunction.ContainsKey('Path') -and $null -ne $tempFunction.Path)
+        {
+            Remove-Module -FullyQualifiedName $tempFunction.Path
+        }
     }
 
     return $Resource
@@ -577,7 +598,10 @@ function Set-MofResource
     }
     finally
     {
-        Remove-Module -FullyQualifiedName $tempFunction.Path
+        if ($null -ne $tempFunction -and $tempFunction.ContainsKey('Path') -and $null -ne $tempFunction.Path)
+        {
+            Remove-Module -FullyQualifiedName $tempFunction.Path
+        }
     }
 }
 
@@ -775,7 +799,7 @@ function Test-DscMofConfig
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     $output = @()
-    $allResources = @()
+    $allInstances = @()
 
     if ($PSCmdlet.ParameterSetName -eq 'ByFile')
     {
@@ -785,12 +809,12 @@ function Test-DscMofConfig
             $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
             foreach ($mofFile in $mofFiles)
             {
-                $allResources += Get-MofCimInstances -Path $mofFile
+                $allInstances += Get-MofCimInstances -Path $mofFile
             }
         }
         else
         {
-            $allResources += Get-MofCimInstances -Path $Path
+            $allInstances += Get-MofCimInstances -Path $Path
         }
     }
     else
@@ -800,14 +824,14 @@ function Test-DscMofConfig
         foreach($configuration in $configurations.Configurations)
         {
             $resourceStatus += $configuration.Resources
-            $allResources += Get-MofCimInstances -Path $configuration.MofPath
+            $allInstances += Get-MofCimInstances -Path $configuration.MofPath
         }
     }
 
     $graph = @{}
-    foreach ($resource in $allResources)
+    foreach ($mofInstance in $allInstances)
     {
-        $graph[$resource.ResourceId] = $resource.DependsOn
+        $graph[$mofInstance.ResourceId] = $mofInstance.DependsOn
     }
 
     $sorted = Invoke-SortDependencyGraph -Graph $graph
@@ -815,21 +839,34 @@ function Test-DscMofConfig
     $count = 0
     foreach ($resourceId in $sorted)
     {
-        $instance = $allResources.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
+        $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
+
         if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
         {
             $updateResource = $resourceStatus.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
         }
 
+        # Test that module is present. If not skip it.
+        if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
+        {
+            Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            {
+                $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+            }
+
+            continue
+        }
+
         $count++
-        Write-Progress -Activity "$count of $($allResources.Count), $(($count/$($allResources.Count)).ToString('P'))" -Status "$($resource.ResourceId)" -PercentComplete ($count/$($allResources.Count))
+        Write-Progress -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete ($count/$($allInstances.Count))
         
         $dependencySet = $false
-        if ($null -ne $resource.DependsOn)
+        if ($null -ne $instance.DependsOn)
         {
-            foreach ($dependencyId in $resource.DependsOn)
+            foreach ($dependencyId in $instance.DependsOn)
             {
-                $dependencySet = -not [string]::IsNullOrEmpty($allResources.Where({$_.ResourceId -eq $dependencyId}).LastSet)
+                $dependencySet = -not [string]::IsNullOrEmpty($allInstances.Where({$_.ResourceId -eq $dependencyId}).LastSet)
                 if ($dependencySet)
                 {
                     Write-Verbose -Message ($LocalizedData.DependencySet -f $resourceId, $dependencyId)
@@ -842,29 +879,42 @@ function Test-DscMofConfig
             }
         }
 
-        $resource = Convert-MofInstance -Instance $instance -IncludeProperties
         try
         {
-            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+            $resource = Convert-MofInstance -Instance $instance -IncludeProperties
         }
         catch
         {
             if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
             {
-                $updateResource.LastTest = Get-TimeStamp
                 $updateResource.Exception = $_.Exception.Message
-                $updateResource.InDesiredState = $false
-                $output += $false
             }
-        }
 
-        if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-        {
-            $updateResource.LastTest = Get-TimeStamp
-            $updateResource.InDesiredState = $result
+            Write-Warning -Message $_.Exception.Message
+
+            continue
         }
         
-        # Add new object to config stack
+        try
+        {
+            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            {
+                $updateResource.LastTest = Get-TimeStamp
+                $updateResource.InDesiredState = $result
+            }
+        }
+        catch
+        {
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            {
+                $updateResource.Exception = $_.Exception.Message
+                $updateResource.InDesiredState = $false
+            }
+
+            Write-Error -Exception $_.Exception -Message $_.Exception.Message
+        }
+       
         $output += $result
     }
 
@@ -900,45 +950,166 @@ function Assert-DscMofConfig
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    $allResources = @()
+    New-Variable -Name 'DSCMachineStatus ' -Scope 'Global' -Value 0 -Force
+
+    $allInstances = @()
+
     if ($PSCmdlet.ParameterSetName -eq 'ByFile')
     {
-        $allResources = Get-MofCimInstances -Path $Path
+        if (Test-Path -Path $Path -PathType 'Container')
+        {
+            Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
+            $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
+            foreach ($mofFile in $mofFiles)
+            {
+                $allInstances += Get-MofCimInstances -Path $mofFile
+            }
+        }
+        else
+        {
+            $allInstances += Get-MofCimInstances -Path $Path
+        }
     }
     else
     {
-        $configurations = (Get-DscMofConfig).Configurations
-        foreach($configuration in $configurations)
+        $resourceStatus = @()
+        $configurations = Get-DscMofConfig
+        foreach($configuration in $configurations.Configurations)
         {
-            $allResources += Get-MofCimInstances -Path $configuration.MofPath
+            $resourceStatus += $configuration.Resources
+            $allInstances += Get-MofCimInstances -Path $configuration.MofPath
         }
     }
 
-    $resourceGroups = $allResources | Group-Object -Property 'Name'
-    $count = 0
-    foreach ($resourceGroup in $resourceGroups)
+    $graph = @{}
+    foreach ($mofInstance in $allInstances)
     {
-        $group = $resourceGroup.Group
-        $output = @()
-        foreach($resource in $group)
+        $graph[$mofInstance.ResourceId] = $mofInstance.DependsOn
+    }
+
+    $sorted = Invoke-SortDependencyGraph -Graph $graph
+
+    $count = 0
+    foreach ($resourceId in $sorted)
+    {
+        $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
+        if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
         {
-            $count++
-            Write-Progress -Activity "$count of $($allResources.Count), $(($count/$($allResources.Count)).ToString('P'))" -Status "$($resource.ResourceId)" -PercentComplete ($count/$($allResources.Count))
-            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-            if($group.Mode -eq 'ApplyAndAutoCorrect' -and -not $result.InDesiredState)
+            $updateResource = $resourceStatus.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
+        }
+
+        # Test that module is present. If not skip it.
+        if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
+        {
+            Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
             {
-                $result = Set-MofResource -Resource $result -Verbose:$verboseSetting
+                $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
             }
 
-            $output += $result
+            continue
         }
 
-        $jsonPath = $group.JsonPath | Select-Object -First 1
-        $output | ConvertTo-Json -Depth 4 | Out-File -FilePath $jsonPath -Force
-        Write-Output -InputObject $output
+        $count++
+        Write-Progress -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete ($count/$($allInstances.Count))
+        
+        # Check for dependencies. 
+        if ($null -ne $instance.DependsOn)
+        {
+            foreach ($dependencyId in $instance.DependsOn)
+            {
+                $dependencyInstance = $allInstances.Where({$_.ResourceId -eq $dependencyId}) | Select-Object -First 1
+                $dependencyInDesiredState = $dependencyInstance.InDesiredState
+                if ($dependencyInDesiredState)
+                {
+                    Write-Verbose -Message ($LocalizedData.DependencyInDesiredState -f $resourceId, $dependencyId)
+                }
+                else
+                {
+                    Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
+                    continue
+                }
+            }
+        }
+
+        try
+        {
+            $resource = Convert-MofInstance -Instance $instance -IncludeProperties
+        }
+        catch
+        {
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            {
+                $updateResource.Exception = $_.Exception.Message
+            }
+
+            Write-Warning -Message $_.Exception.Message
+
+            continue
+        }
+
+        # Test resource
+        try
+        {
+            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            {
+                $updateResource.LastTest = Get-TimeStamp
+                $updateResource.InDesiredState = $result
+            }
+        }
+        catch
+        {
+            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            {
+                $updateResource.Exception = $_.Exception.Message
+                $updateResource.InDesiredState = $false
+            }
+
+            Write-Error -Exception $_.Exception -Message $_.Exception.Message
+            continue
+        }
+
+        # Set resource
+        if($resource.Mode -eq 'ApplyAndAutoCorrect' -and -not $result)
+        {
+            try
+            {
+                $result = Set-MofResource -Resource $result -Verbose:$verboseSetting
+                $updateResource.LastSet = Get-TimeStamp
+            }
+            catch
+            {
+                if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+                {
+                    $updateResource.Exception = $_.Exception.Message
+                    $updateResource.InDesiredState = $false
+                }
+            }
+        }
     }
 
-    Write-Progress -Completed -Activity 'Complete'
+    # Write log to file
+    if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+    {
+        $configurations | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+    }
+
+    Write-Progress -Completed -Activity 'Completed'
+
+    if ($global:DSCMachineStatus -eq 1 -and $configurations.Settings.AllowReboot -eq 'true')
+    {
+        Write-Verbose -Message $LocalizedData.Reboot
+        Restart-Computer -Force -Delay 15
+    }
+    elseif($global:DSCMachineStatus -eq 1)
+    {
+        Write-Warning -Message $LocalizedData.RebootRequiredNotAllowed
+    }
+    else
+    {
+        Write-Verbose -Message $LocalizedData.RebootNotRequired
+    }
 }
 
 function Get-DscMofConfig
