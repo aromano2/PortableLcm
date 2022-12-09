@@ -1032,6 +1032,7 @@ function Assert-DscMofConfig
                 }
                 else
                 {
+                    $updateResource.Exception = ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
                     Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
                     continue
                 }
