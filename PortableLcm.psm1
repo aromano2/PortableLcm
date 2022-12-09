@@ -866,13 +866,19 @@ function Test-DscMofConfig
         {
             foreach ($dependencyId in $instance.DependsOn)
             {
-                $dependencySet = -not [string]::IsNullOrEmpty($allInstances.Where({$_.ResourceId -eq $dependencyId}).LastSet)
+                $lastSet = ($allInstances.Where({$_.ResourceId -eq $dependencyId}) | Select-Object -First 1).LastSet
+                $dependencySet = -not [string]::IsNullOrEmpty($lastSet)
                 if ($dependencySet)
                 {
                     Write-Verbose -Message ($LocalizedData.DependencySet -f $resourceId, $dependencyId)
                 }
                 else
                 {
+                    if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+                    {
+                        $updateResource.Exception = ($LocalizedData.DependencyNotSet -f $resourceId, $dependencyId)
+                    }
+
                     Write-Warning -Message ($LocalizedData.DependencyNotSet -f $resourceId, $dependencyId)
                     continue
                 }
