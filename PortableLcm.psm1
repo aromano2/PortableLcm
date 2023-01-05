@@ -29,6 +29,9 @@ data LocalizedData
     RebootNotRequired = A reboot is not required.
     Reboot = Rebooting to finish applying configuration.
     CredentialNotSupported = Credential property detected in resource '{0}'. Credentials are currently not supported. Skipping.
+    LcmBusy = A compliance check is already in progress in process '{0}'.
+    StopWait = Waiting '{0}' seconds before shutting down.
+    MissingProcessId = Unable to stop lcm process. Process ID is missing from the configuration.
 '@
 }
 
@@ -45,7 +48,11 @@ if (-not (Test-Path -Path $configPath))
 
     $config = [ordered]@{
         Settings = @{
-            AllowReboot = $true
+            AllowReboot           = $true
+            Status                = 'Idle'
+            ProcessId             = $null
+            Cancel                = $false
+            CancelTimeoutInSeconds = 300
         }
         Configurations = @()
     }
@@ -790,45 +797,41 @@ function Get-MofCimInstances
 #>
 function Test-DscMofConfig
 {
-    [CmdletBinding(DefaultParameterSetName = 'ByConfiguration')]
+    [CmdletBinding()]
     [OutputType([bool])]
     param
     (
-        [Parameter(Mandatory = $true, ParameterSetName = 'ByFile')]
-        [ValidateScript({Test-Path -Path $_})]
-        [string]
-        $Path
+        [Parameter()]
+        [switch]
+        $Force
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     $output = @()
     $allInstances = @()
-
-    if ($PSCmdlet.ParameterSetName -eq 'ByFile')
+    $lcmResourcesList = @()
+    $lcm = Get-LcmConfig
+    if ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId -and -not $Force))
     {
-        if (Test-Path -Path $Path -PathType 'Container')
-        {
-            Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
-            $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
-            foreach ($mofFile in $mofFiles)
-            {
-                $allInstances += Get-MofCimInstances -Path $mofFile
-            }
-        }
-        else
-        {
-            $allInstances += Get-MofCimInstances -Path $Path
-        }
+        Write-Warning -Message ($LocalizedData.LcmBusy -f $lcm.Settings.ProcessId)
+        return
+    }
+    elseif ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId) -and $Force)
+    {
+        Write-Verbose -Message ($LocalizedData.ForceStop)
+        Stop-Lcm -Force
     }
     else
     {
-        $resourceStatus = @()
-        $configurations = Get-DscMofConfig
-        foreach($configuration in $configurations.Configurations)
-        {
-            $resourceStatus += $configuration.Resources
-            $allInstances += Get-MofCimInstances -Path $configuration.MofPath
-        }
+        $lcm.Settings.Status = 'Busy'
+        $lcm.Settings.ProcessId = $PID
+        $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+    }
+
+    foreach($configuration in $lcm.Configurations)
+    {
+        $lcmResourcesList += $configuration.Resources
+        $allInstances += Get-MofCimInstances -Path $configuration.MofPath
     }
 
     $graph = @{}
@@ -838,16 +841,11 @@ function Test-DscMofConfig
     }
 
     $sorted = Invoke-SortDependencyGraph -Graph $graph
-
     $count = 0
     foreach ($resourceId in $sorted)
     {
         $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
-
-        if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-        {
-            $updateResource = $resourceStatus.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
-        }
+        $updateResource = $lcmResourcesList.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
 
         # Test that module is present. If not skip it.
         if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
@@ -867,6 +865,7 @@ function Test-DscMofConfig
         $dependencySet = $false
         if ($null -ne $instance.DependsOn)
         {
+            $skip = $false
             foreach ($dependencyId in $instance.DependsOn)
             {
                 $lastSet = ($allInstances.Where({$_.ResourceId -eq $dependencyId}) | Select-Object -First 1).LastSet
@@ -877,15 +876,17 @@ function Test-DscMofConfig
                 }
                 else
                 {
-                    if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-                    {
-                        $updateResource.Exception = ($LocalizedData.DependencyNotSet -f $resourceId, $dependencyId)
-                    }
-
+                    $updateResource.Exception = ($LocalizedData.DependencyNotSet -f $resourceId, $dependencyId)
                     Write-Warning -Message ($LocalizedData.DependencyNotSet -f $resourceId, $dependencyId)
-                    continue
+                    $skip = $true
+                    break
                 }
             }
+        }
+
+        if ($skip)
+        {
+            break
         }
 
         try
@@ -894,47 +895,111 @@ function Test-DscMofConfig
         }
         catch
         {
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-            {
-                $updateResource.Exception = $_.Exception.Message
-            }
-
+            $updateResource.Exception = $_.Exception.Message
             Write-Warning -Message $_.Exception.Message
-
             continue
         }
         
+        # Check for cancellation token
+        $cancel = (Get-LcmConfig).Settings.Cancel
+        if ($cancel -eq $true)
+        {
+            break
+        }
+
         try
         {
             $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            $updateResource.LastTest = Get-TimeStamp
+            $updateResource.InDesiredState = $result
+
+            # Check for cancellation token
+            $cancel = (Get-LcmConfig).Settings.Cancel
+            if ($cancel -eq $true)
             {
-                $updateResource.LastTest = Get-TimeStamp
-                $updateResource.InDesiredState = $result
+                break
             }
         }
         catch
         {
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-            {
-                $updateResource.Exception = $_.Exception.Message
-                $updateResource.InDesiredState = $false
-            }
-
+            $updateResource.Exception = $_.Exception.Message
+            $updateResource.InDesiredState = $false
             Write-Error -Exception $_.Exception -Message $_.Exception.Message
         }
        
         $output += $result
     }
 
-    # Write log to file
-    if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-    {
-        $configurations | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
-    }
+    # Update LCM status
+    $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+    Reset-Lcm
 
     Write-Progress -Completed -Activity 'Completed'
     return ($output -notcontains $false)
+}
+
+function Stop-Lcm
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter()]
+        [switch]
+        $Force
+    )
+
+    $lcm = Get-LcmConfig
+    if ($Force)
+    {
+        if (-not [string]::IsNullOrEmpty($lcm.Settings.ProcessId))
+        {
+            Stop-Process -Id $lcm.Settings.ProcessId -Force
+            Reset-Lcm
+        }
+        else
+        {
+            Write-Warning -Message $LocalizedData.MissingProcessId
+            Reset-Lcm
+        }
+    }
+    else
+    {
+        $lcm.Settings.Cancel = $true
+        $lcm | ConvertTo-Json -Depth 6 | Out-File $MofConfigPath
+
+        if (-not [string]::IsNullOrEmpty($lcm.Settings.CancelTimeoutInSeconds))
+        {
+            $stopwatch = [System.Diagnostics.Stopwatch]::new()
+            $stopwatch.Start()
+            if ($null -ne (Get-Process -Id $lcm.Settings.ProcessId -ErrorAction 'SilentlyContinue'))
+            {
+                while ($stopwatch.Elapsed.TotalSeconds -lt $lcm.Settings.CancelTimeoutInSeconds)
+                {
+                    Start-Sleep -Seconds 1
+                    if ($null -eq (Get-Process -Id $lcm.Settings.ProcessId -ErrorAction 'SilentlyContinue'))
+                    {
+                        break
+                    }
+                }
+            }
+            
+            Stop-Process -Id $lcm.Settings.ProcessId -Force -ErrorAction 'SilentlyContinue'
+            Reset-Lcm
+        }
+    }
+}
+
+function Reset-Lcm
+{
+    [CmdletBinding()]
+    param()
+
+    $lcm = Get-LcmConfig
+    $lcm.Settings.Cancel = $false
+    $lcm.Settings.Status = 'Idle'
+    $lcm.Settings.ProcessId = $null
+
+    $lcm | ConvertTo-Json -Depth 6 | Out-File $MofConfigPath
 }
 
 <#
@@ -949,46 +1014,42 @@ function Test-DscMofConfig
 #>
 function Assert-DscMofConfig
 {
-    [CmdletBinding(DefaultParameterSetName = 'ByConfiguration')]
+    [CmdletBinding()]
+    [OutputType([bool])]
     param
     (
-        [Parameter(Mandatory = $true, ParameterSetName = 'ByFile')]
-        [ValidateScript({Test-Path -Path $_})]
-        [string]
-        $Path
+        [Parameter()]
+        [switch]
+        $Force
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     New-Variable -Name 'DSCMachineStatus ' -Scope 'Global' -Value 0 -Force
-
-    $allInstances = @()
-
-    if ($PSCmdlet.ParameterSetName -eq 'ByFile')
+    $lcm = Get-LcmConfig
+    if ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId -and -not $Force))
     {
-        if (Test-Path -Path $Path -PathType 'Container')
-        {
-            Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
-            $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
-            foreach ($mofFile in $mofFiles)
-            {
-                $allInstances += Get-MofCimInstances -Path $mofFile
-            }
-        }
-        else
-        {
-            $allInstances += Get-MofCimInstances -Path $Path
-        }
+        Write-Warning -Message ($LocalizedData.LcmBusy -f $lcm.Settings.ProcessId)
+        return
+    }
+    elseif ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId) -and $Force)
+    {
+        Write-Verbose -Message ($LocalizedData.ForceStop)
+        Stop-Lcm -Force
     }
     else
     {
-        $resourceStatus = @()
-        $configurations = Get-DscMofConfig
-        foreach($configuration in $configurations.Configurations)
-        {
-            $resourceStatus += $configuration.Resources
-            $allInstances += Get-MofCimInstances -Path $configuration.MofPath
-        }
+        $lcm.Settings.Status = 'Busy'
+        $lcm.Settings.ProcessId = $PID
+        $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
     }
+
+    $allInstances = @()
+    $lcmResourcesList = @()
+    foreach($configuration in $lcm.Configurations)
+    {
+        $lcmResourcesList += $configuration.Resources
+        $allInstances += Get-MofCimInstances -Path $configuration.MofPath
+    }    
 
     $graph = @{}
     foreach ($mofInstance in $allInstances)
@@ -997,32 +1058,25 @@ function Assert-DscMofConfig
     }
 
     $sorted = Invoke-SortDependencyGraph -Graph $graph
-
     $count = 0
     foreach ($resourceId in $sorted)
     {
         $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
-        if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-        {
-            $updateResource = $resourceStatus.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
-        }
-
+        $updateResource = $lcmResourcesList.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
+        
         # Test that module is present. If not skip it.
         if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
         {
             Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-            {
-                $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
-            }
-
+            $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
             continue
         }
 
         $count++
         Write-Progress -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete ($count/$($allInstances.Count))
         
-        # Check for dependencies. 
+        # Check for dependencies.
+        $skip = $false 
         if ($null -ne $instance.DependsOn)
         {
             foreach ($dependencyId in $instance.DependsOn)
@@ -1037,9 +1091,15 @@ function Assert-DscMofConfig
                 {
                     $updateResource.Exception = ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
                     Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
-                    continue
+                    $skip = $true
+                    break
                 }
             }
+        }
+        
+        if ($skip)
+        {
+            continue
         }
 
         try
@@ -1048,33 +1108,36 @@ function Assert-DscMofConfig
         }
         catch
         {
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-            {
-                $updateResource.Exception = $_.Exception.Message
-            }
-
+            $updateResource.Exception = $_.Exception.Message
             Write-Warning -Message $_.Exception.Message
-
             continue
+        }
+
+        # Check for cancellation token
+        $cancel = (Get-LcmConfig).Settings.Cancel
+        if ($cancel -eq $true)
+        {
+            break
         }
 
         # Test resource
         try
         {
             $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
+            $updateResource.LastTest = Get-TimeStamp
+            $updateResource.InDesiredState = $result
+
+            # Check for cancellation token
+            $cancel = (Get-LcmConfig).Settings.Cancel
+            if ($cancel -eq $true)
             {
-                $updateResource.LastTest = Get-TimeStamp
-                $updateResource.InDesiredState = $result
+                break
             }
         }
         catch
         {
-            if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-            {
-                $updateResource.Exception = $_.Exception.Message
-                $updateResource.InDesiredState = $false
-            }
+            $updateResource.Exception = $_.Exception.Message
+            $updateResource.InDesiredState = $false
 
             Write-Error -Exception $_.Exception -Message $_.Exception.Message
             continue
@@ -1090,24 +1153,18 @@ function Assert-DscMofConfig
             }
             catch
             {
-                if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-                {
-                    $updateResource.Exception = $_.Exception.Message
-                    $updateResource.InDesiredState = $false
-                }
+                $updateResource.Exception = $_.Exception.Message
+                $updateResource.InDesiredState = $false
             }
         }
     }
 
-    # Write log to file
-    if ($PSCmdlet.ParameterSetName -eq 'ByConfiguration')
-    {
-        $configurations | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
-    }
+    # Update LCM status
+    $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+    Reset-Lcm
 
     Write-Progress -Completed -Activity 'Completed'
-
-    if ($global:DSCMachineStatus -eq 1 -and $configurations.Settings.AllowReboot -eq 'true')
+    if ($global:DSCMachineStatus -eq 1 -and $lcm.Settings.AllowReboot -eq 'true')
     {
         Write-Verbose -Message $LocalizedData.Reboot
         Restart-Computer -Force -Delay 15
@@ -1122,7 +1179,7 @@ function Assert-DscMofConfig
     }
 }
 
-function Get-DscMofConfig
+function Get-LcmConfig
 {
     return Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
 }
@@ -1134,7 +1191,7 @@ function Remove-DscMofConfig
 
     DynamicParam
     {
-        $configurations = (Get-DscMofConfig).Configurations
+        $configurations = (Get-LcmConfig).Configurations
         $attribute = New-Object System.Management.Automation.ParameterAttribute
         $attribute.Mandatory = $false
         $attribute.HelpMessage = "Name of the MOF"
@@ -1157,7 +1214,7 @@ function Remove-DscMofConfig
     }
     process
     {
-        $config = Get-DscMofConfig
+        $config = Get-LcmConfig
         $config.Configurations = $config.Configurations.Where({$_.Name -ne $Name})
         $config | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
     }
@@ -1195,7 +1252,7 @@ function Get-DscMofStatus
 
     DynamicParam
     {
-        $configurations = (Get-DscMofConfig).Configurations
+        $configurations = (Get-LcmConfig).Configurations
         $attribute = New-Object System.Management.Automation.ParameterAttribute
         $attribute.Mandatory = $false
         $attribute.HelpMessage = "Name of the MOF"
@@ -1219,7 +1276,7 @@ function Get-DscMofStatus
     process
     {
         $overallStatus = @()
-        $configurations = (Get-DscMofConfig).Configurations
+        $configurations = (Get-LcmConfig).Configurations
         if ($Name)
         {
             $configurations = $configurations.Where({$_.Name -eq $Name})
@@ -1277,7 +1334,7 @@ function Install-DscMofModules
     }
     else
     {
-        $configFiles = (Get-DscMofConfig).Configurations.MofPath
+        $configFiles = (Get-LcmConfig).Configurations.MofPath
     }
 
     $configResources = @()
@@ -1330,7 +1387,7 @@ function Publish-DscMofConfig
     )
 
     # Read in configuration data
-    $mofConfig = Get-DscMofConfig
+    $mofConfig = Get-LcmConfig
     $configurations = $mofConfig.Configurations
     if (Test-Path -Path $Path -PathType 'Container')
     {
@@ -1396,4 +1453,4 @@ function Publish-DscMofConfig
     $tempConfig | ConvertTo-Json -Depth 6 -WarningAction 'SilentlyContinue' | Out-File -FilePath $MofConfigPath
 }
 
-Export-ModuleMember -Function Assert-DscMofConfig, Test-DscMofConfig, Get-MofCimInstances, Publish-DscMofConfig, Get-DscMofConfig, Get-DscMofStatus, Install-DscMofModules, Remove-DscMofConfig, Get-MofInstanceProperties
+Export-ModuleMember -Function Assert-DscMofConfig, Test-DscMofConfig, Get-MofCimInstances, Publish-DscMofConfig, Get-LcmConfig, Get-DscMofStatus, Install-DscMofModules, Remove-DscMofConfig, Get-MofInstanceProperties, Assert-DscCompliance, Stop-Lcm, *
