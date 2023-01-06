@@ -1432,12 +1432,12 @@ function Publish-DscMofConfig
         }
 
         Write-Verbose -Message ($LocalizedData.CopyMof -f $Path, $mofCopyPath)
-        $null = Copy-Item -Path $Path -Destination $mofCopyPath -Force
+        $null = Copy-Item -Path $mofFiles -Destination $mofCopyPath -Force
         
         $mofResources = Import-MofConfig -Path $mofFile -Mode $Mode
         $properties.ResourceCount = $mofResources.Count
         $properties.Resources += $mofResources
-        if ($existingConfig -gt 0)
+        if ($existingConfig.Count -gt 0)
         {
             $existingConfig.Hash = $hash
             $existingConfig.Mode = $Mode
