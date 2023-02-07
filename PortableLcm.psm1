@@ -576,12 +576,12 @@ function Set-MofResource
     
     try
     {
-        $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Name -Operation 'Set'
-        if(Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Property)
+        $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Type -Operation 'Set'
+        if(Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Properties)
         {
             Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Property -Verbose:$verboseSetting
-            Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.ResourceName)
+            $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Properties -Verbose:$verboseSetting
+            Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.Type)
 
             try
             {
@@ -1043,89 +1043,77 @@ function Assert-DscMofConfig
         $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
     }
 
-    $allInstances = @()
-    $lcmResourcesList = @()
-    foreach($configuration in $lcm.Configurations)
+    try
     {
-        $lcmResourcesList += $configuration.Resources
-        $allInstances += Get-MofCimInstances -Path $configuration.MofPath
-    }    
-
-    $graph = @{}
-    foreach ($mofInstance in $allInstances)
-    {
-        $graph[$mofInstance.ResourceId] = $mofInstance.DependsOn
-    }
-
-    $sorted = Invoke-SortDependencyGraph -Graph $graph
-    $count = 0
-    foreach ($resourceId in $sorted)
-    {
-        $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
-        $updateResource = $lcmResourcesList.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
-        
-        # Test that module is present. If not skip it.
-        if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
+        $allInstances = @()
+        $lcmResourcesList = @()
+        foreach($configuration in $lcm.Configurations)
         {
-            Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
-            $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
-            continue
+            $lcmResourcesList += $configuration.Resources
+            $allInstances += Get-MofCimInstances -Path $configuration.MofPath
+        }    
+
+        $graph = @{}
+        foreach ($mofInstance in $allInstances)
+        {
+            $graph[$mofInstance.ResourceId] = $mofInstance.DependsOn
         }
 
-        $count++
-        Write-Progress -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete ($count/$($allInstances.Count))
-        
-        # Check for dependencies.
-        $skip = $false 
-        if ($null -ne $instance.DependsOn)
+        $sorted = Invoke-SortDependencyGraph -Graph $graph
+        $count = 0
+        foreach ($resourceId in $sorted)
         {
-            foreach ($dependencyId in $instance.DependsOn)
+            $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
+            $updateResource = $lcmResourcesList.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
+            
+            # Test that module is present. If not skip it.
+            if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
             {
-                $dependencyInstance = $allInstances.Where({$_.ResourceId -eq $dependencyId}) | Select-Object -First 1
-                $dependencyInDesiredState = $dependencyInstance.InDesiredState
-                if ($dependencyInDesiredState)
+                Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+                $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+                continue
+            }
+
+            $count++
+            Write-Progress -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete ($count/$($allInstances.Count))
+            
+            # Check for dependencies.
+            $skip = $false 
+            if ($null -ne $instance.DependsOn)
+            {
+                foreach ($dependencyId in $instance.DependsOn)
                 {
-                    Write-Verbose -Message ($LocalizedData.DependencyInDesiredState -f $resourceId, $dependencyId)
-                }
-                else
-                {
-                    $updateResource.Exception = ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
-                    Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
-                    $skip = $true
-                    break
+                    $dependencyInstance = $allInstances.Where({$_.ResourceId -eq $dependencyId}) | Select-Object -First 1
+                    $dependencyInDesiredState = $dependencyInstance.InDesiredState
+                    if ($dependencyInDesiredState)
+                    {
+                        Write-Verbose -Message ($LocalizedData.DependencyInDesiredState -f $resourceId, $dependencyId)
+                    }
+                    else
+                    {
+                        $updateResource.Exception = ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
+                        Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
+                        $skip = $true
+                        break
+                    }
                 }
             }
-        }
-        
-        if ($skip)
-        {
-            continue
-        }
+            
+            if ($skip)
+            {
+                continue
+            }
 
-        try
-        {
-            $resource = Convert-MofInstance -Instance $instance -IncludeProperties
-        }
-        catch
-        {
-            $updateResource.Exception = $_.Exception.Message
-            Write-Warning -Message $_.Exception.Message
-            continue
-        }
-
-        # Check for cancellation token
-        $cancel = (Get-LcmConfig).Settings.Cancel
-        if ($cancel -eq $true)
-        {
-            break
-        }
-
-        # Test resource
-        try
-        {
-            $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-            $updateResource.LastTest = Get-TimeStamp
-            $updateResource.InDesiredState = $result
+            try
+            {
+                $resource = Convert-MofInstance -Instance $instance -IncludeProperties
+            }
+            catch
+            {
+                $updateResource.Exception = $_.Exception.Message
+                Write-Warning -Message $_.Exception.Message
+                continue
+            }
 
             # Check for cancellation token
             $cancel = (Get-LcmConfig).Settings.Cancel
@@ -1133,49 +1121,68 @@ function Assert-DscMofConfig
             {
                 break
             }
-        }
-        catch
-        {
-            $updateResource.Exception = $_.Exception.Message
-            $updateResource.InDesiredState = $false
 
-            Write-Error -Exception $_.Exception -Message $_.Exception.Message
-            continue
-        }
-
-        # Set resource
-        if($resource.Mode -eq 'ApplyAndAutoCorrect' -and -not $result)
-        {
+            # Test resource
             try
             {
-                $result = Set-MofResource -Resource $result -Verbose:$verboseSetting
-                $updateResource.LastSet = Get-TimeStamp
+                $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
+                $updateResource.LastTest = Get-TimeStamp
+                $updateResource.InDesiredState = $result
+
+                # Check for cancellation token
+                $cancel = (Get-LcmConfig).Settings.Cancel
+                if ($cancel -eq $true)
+                {
+                    break
+                }
             }
             catch
             {
                 $updateResource.Exception = $_.Exception.Message
                 $updateResource.InDesiredState = $false
+
+                Write-Error -Exception $_.Exception -Message $_.Exception.Message
+                continue
+            }
+
+            # Set resource
+            if($resource.Mode -eq 'ApplyAndAutoCorrect' -and -not $result)
+            {
+                try
+                {
+                    $result = Set-MofResource -Resource $resource -Verbose:$verboseSetting
+                    $updateResource.LastSet = Get-TimeStamp
+                    $updateResource.Exception = ""
+                }
+                catch
+                {
+                    $updateResource.Exception = $_.Exception.Message
+                    $updateResource.InDesiredState = $false
+                }
             }
         }
-    }
 
-    # Update LCM status
-    $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
-    Reset-Lcm
+        # Update LCM status
+        $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
 
-    Write-Progress -Completed -Activity 'Completed'
-    if ($global:DSCMachineStatus -eq 1 -and $lcm.Settings.AllowReboot -eq 'true')
-    {
-        Write-Verbose -Message $LocalizedData.Reboot
-        Restart-Computer -Force -Delay 15
+        Write-Progress -Completed -Activity 'Completed'
+        if ($global:DSCMachineStatus -eq 1 -and $lcm.Settings.AllowReboot -eq 'true')
+        {
+            Write-Verbose -Message $LocalizedData.Reboot
+            Restart-Computer -Force -Delay 15
+        }
+        elseif($global:DSCMachineStatus -eq 1)
+        {
+            Write-Warning -Message $LocalizedData.RebootRequiredNotAllowed
+        }
+        else
+        {
+            Write-Verbose -Message $LocalizedData.RebootNotRequired
+        }
     }
-    elseif($global:DSCMachineStatus -eq 1)
+    finally
     {
-        Write-Warning -Message $LocalizedData.RebootRequiredNotAllowed
-    }
-    else
-    {
-        Write-Verbose -Message $LocalizedData.RebootNotRequired
+        Reset-Lcm
     }
 }
 
