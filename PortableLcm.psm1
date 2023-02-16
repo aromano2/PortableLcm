@@ -1191,7 +1191,30 @@ function Assert-DscMofConfig
 
 function Get-LcmConfig
 {
-    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
+    $config = Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
+    
+    if (-not (Test-Path -Path $MofConfigPath) -or ($null -eq $config))
+    {
+        if (-not (Split-Path -Path $MofConfigPath -Parent))
+        {
+            $null = New-Item -Path (Split-Path -Path $MofConfigPath -Parent) -ItemType 'Directory'
+        }
+
+        $config = [ordered]@{
+            Settings = @{
+                AllowReboot           = $true
+                Status                = 'Idle'
+                ProcessId             = $null
+                Cancel                = $false
+                CancelTimeoutInSeconds = 300
+            }
+            Configurations = @()
+        }
+
+        $config | ConvertTo-Json | Out-File -FilePath $configPath
+    }
+
+    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
 }
 
 function Remove-DscMofConfig
