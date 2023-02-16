@@ -1188,7 +1188,9 @@ function Assert-DscMofConfig
 
 function Get-LcmConfig
 {
-    if (-not (Test-Path -Path $MofConfigPath))
+    $config = Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
+    
+    if (-not (Test-Path -Path $MofConfigPath) -or ($null -eq $config))
     {
         if (-not (Split-Path -Path $MofConfigPath -Parent))
         {
