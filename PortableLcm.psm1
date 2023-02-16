@@ -1188,6 +1188,27 @@ function Assert-DscMofConfig
 
 function Get-LcmConfig
 {
+    if (-not (Test-Path -Path $MofConfigPath))
+    {
+        if (-not (SplitPath -Path $MofConfigPath -Parent))
+        {
+            $null = New-Item -Path (SplitPath -Path $MofConfigPath -Parent) -ItemType 'Directory'
+        }
+
+        $config = [ordered]@{
+            Settings = @{
+                AllowReboot           = $true
+                Status                = 'Idle'
+                ProcessId             = $null
+                Cancel                = $false
+                CancelTimeoutInSeconds = 300
+            }
+            Configurations = @()
+        }
+
+        $config | ConvertTo-Json | Out-File -FilePath $configPath
+    }
+    
     return Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
 }
 
