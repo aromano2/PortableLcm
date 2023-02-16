@@ -14,9 +14,6 @@
 # Version number of this module.
 ModuleVersion = '0.0.1'
 
-# Supported PSEditions
-CompatiblePSEditions = 'Core'
-
 # ID used to uniquely identify this module
 GUID = 'fa9cb268-0609-4c74-8fba-aa5a169c081e'
 
@@ -33,7 +30,7 @@ Copyright = '(c) 2022 Microsoft Corporation. All rights reserved.'
 Description = 'This module provides the ability to invoke dsc resources from an existing .MOF file.'
 
 # Minimum version of the PowerShell engine required by this module
-PowerShellVersion = '7.2'
+PowerShellVersion = '5.1'
 
 # Name of the PowerShell host required by this module
 # PowerShellHostName = ''
@@ -51,7 +48,7 @@ PowerShellVersion = '7.2'
 # ProcessorArchitecture = ''
 
 # Modules that must be imported into the global environment prior to importing this module
-RequiredModules = @(@{ModuleName = 'PSDesiredStateConfiguration'; ModuleVersion = '2.0.5'; })
+RequiredModules = @(@{ModuleName = 'PSDesiredStateConfiguration'; ModuleVersion = '1.1'; })
 
 # Assemblies that must be loaded prior to importing this module
 # RequiredAssemblies = @()

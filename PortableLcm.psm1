@@ -35,29 +35,32 @@ data LocalizedData
 '@
 }
 
-$configParentPath = Join-Path -Path $env:ProgramData -ChildPath 'PortableLcm'
-$configPath = Join-Path -Path $configParentPath -ChildPath 'config.json'
-New-Variable -Name 'MofConfigPath' -Option 'ReadOnly' -Scope 'Global' -Value $configPath -Force
-
-if (-not (Test-Path -Path $configPath))
+function Initialize-Lcm
 {
-    if (-not (Test-Path -Path $configParentPath))
+    $configParentPath = Join-Path -Path $env:ProgramData -ChildPath 'PortableLcm'
+    $configPath = Join-Path -Path $configParentPath -ChildPath 'config.json'
+    New-Variable -Name 'MofConfigPath' -Option 'ReadOnly' -Scope 'Global' -Value $configPath -Force
+
+    if (-not (Test-Path -Path $configPath))
     {
-        $null = New-Item -Path $configParentPath -ItemType 'Directory'
-    }
-
-    $config = [ordered]@{
-        Settings = @{
-            AllowReboot           = $true
-            Status                = 'Idle'
-            ProcessId             = $null
-            Cancel                = $false
-            CancelTimeoutInSeconds = 300
+        if (-not (Test-Path -Path $configParentPath))
+        {
+            $null = New-Item -Path $configParentPath -ItemType 'Directory'
         }
-        Configurations = @()
-    }
 
-    $config | ConvertTo-Json | Out-File -FilePath $configPath
+        $config = [ordered]@{
+            Settings = @{
+                AllowReboot           = $true
+                Status                = 'Idle'
+                ProcessId             = $null
+                Cancel                = $false
+                CancelTimeoutInSeconds = 300
+            }
+            Configurations = @()
+        }
+
+        $config | ConvertTo-Json | Out-File -FilePath $configPath
+    }
 }
 
 class Resource
@@ -529,7 +532,7 @@ function Test-MofResource
     {
         if ($null -ne $tempFunction -and $tempFunction.ContainsKey('Path') -and $null -ne $tempFunction.Path)
         {
-            Remove-Module -FullyQualifiedName $tempFunction.Path
+            #Remove-Module -FullyQualifiedName $tempFunction.Path
         }
     }
 
@@ -610,7 +613,7 @@ function Set-MofResource
     {
         if ($null -ne $tempFunction -and $tempFunction.ContainsKey('Path') -and $null -ne $tempFunction.Path)
         {
-            Remove-Module -FullyQualifiedName $tempFunction.Path
+            #Remove-Module -FullyQualifiedName $tempFunction.Path
         }
     }
 }
@@ -1188,7 +1191,7 @@ function Assert-DscMofConfig
 
 function Get-LcmConfig
 {
-    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
+    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
 }
 
 function Remove-DscMofConfig
@@ -1460,4 +1463,4 @@ function Publish-DscMofConfig
     $tempConfig | ConvertTo-Json -Depth 6 -WarningAction 'SilentlyContinue' | Out-File -FilePath $MofConfigPath
 }
 
-Export-ModuleMember -Function Assert-DscMofConfig, Test-DscMofConfig, Get-MofCimInstances, Publish-DscMofConfig, Get-LcmConfig, Get-DscMofStatus, Install-DscMofModules, Remove-DscMofConfig, Get-MofInstanceProperties, Assert-DscCompliance, Stop-Lcm, *
+Export-ModuleMember -Function Initialize-Lcm, Assert-DscMofConfig, Test-DscMofConfig, Get-MofCimInstances, Publish-DscMofConfig, Get-LcmConfig, Get-DscMofStatus, Install-DscMofModules, Remove-DscMofConfig, Get-MofInstanceProperties, Assert-DscCompliance, Stop-Lcm, *
