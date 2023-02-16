@@ -1190,9 +1190,9 @@ function Get-LcmConfig
 {
     if (-not (Test-Path -Path $MofConfigPath))
     {
-        if (-not (SplitPath -Path $MofConfigPath -Parent))
+        if (-not (Split-Path -Path $MofConfigPath -Parent))
         {
-            $null = New-Item -Path (SplitPath -Path $MofConfigPath -Parent) -ItemType 'Directory'
+            $null = New-Item -Path (Split-Path -Path $MofConfigPath -Parent) -ItemType 'Directory'
         }
 
         $config = [ordered]@{
@@ -1208,7 +1208,7 @@ function Get-LcmConfig
 
         $config | ConvertTo-Json | Out-File -FilePath $configPath
     }
-    
+
     return Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
 }
 
