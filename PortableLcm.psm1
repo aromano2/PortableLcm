@@ -1191,7 +1191,7 @@ function Assert-DscMofConfig
 
 function Get-LcmConfig
 {
-    $config = Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
+    $config = Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
     
     if (-not (Test-Path -Path $MofConfigPath) -or ($null -eq $config))
     {
@@ -1214,7 +1214,7 @@ function Get-LcmConfig
         $config | ConvertTo-Json | Out-File -FilePath $configPath
     }
 
-    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -Depth 6 -WarningAction 'SilentlyContinue'
+    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
 }
 
 function Remove-DscMofConfig
@@ -1486,4 +1486,5 @@ function Publish-DscMofConfig
     $tempConfig | ConvertTo-Json -Depth 6 -WarningAction 'SilentlyContinue' | Out-File -FilePath $MofConfigPath
 }
 
+Initialize-Lcm
 Export-ModuleMember -Function Initialize-Lcm, Assert-DscMofConfig, Test-DscMofConfig, Get-MofCimInstances, Publish-DscMofConfig, Get-LcmConfig, Get-DscMofStatus, Install-DscMofModules, Remove-DscMofConfig, Get-MofInstanceProperties, Assert-DscCompliance, Stop-Lcm, *
