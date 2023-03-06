@@ -12,7 +12,7 @@
 RootModule = 'PortableLcm.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.0.1'
+ModuleVersion = '0.0.2'
 
 # ID used to uniquely identify this module
 GUID = 'fa9cb268-0609-4c74-8fba-aa5a169c081e'

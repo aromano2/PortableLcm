@@ -11,6 +11,7 @@ data LocalizedData
     ParametersValidated = Parameters for resource '{0}' passed validation.
     ResourceValidated = Resource '{0}' passed validation.
     CallExternalFunction = Calling {0}-TargetResource for resource '{1}'.
+    ExternalFunctionError = Resource: {0}\n{1} Error: {2}.
     ParametersNotValidated = Parameters for resource '{0}' failed validation.
     ResourceNotInDesiredState = Resource '{0}' is not in desired state.
     ResourceInDesiredState = Resource '{0}' is in desired state.
@@ -505,7 +506,7 @@ function Test-MofResource
             }
             catch
             {
-                Write-Error -Exception $_.Exception -Message $_.Exception.Message
+                throw $_.Exception
             }
 
             if ($result)
@@ -595,6 +596,7 @@ function Set-MofResource
             catch
             {
                 $Resource.Exception = $_.Exception
+                throw $_.Exception
             }
 
             return $Resource
@@ -615,6 +617,42 @@ function Set-MofResource
         {
             #Remove-Module -FullyQualifiedName $tempFunction.Path
         }
+    }
+}
+
+function Write-EventLogEntry
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [string]
+        $EntryMessage,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]
+        $EntryArguments,
+
+        [Parameter()]
+        [ValidateSet("Error", "Warning", "Information")]
+        $EntryType = "Information"
+    )
+
+    if ($env:OS -eq 'Windows_NT' -and $PSEdition -eq 'Desktop')
+    {
+        $eventParams = @{
+            Category = 8 # Pipeline Execution Details
+            EventId = 1000
+            LogName = "Windows PowerShell"
+            Source = "PowerShell"
+            Message = ($EntryMessage -f $EntryArguments)
+            EntryType = $EntryType
+        }
+        Write-EventLog @eventParams
+    }
+
+    if ($EntryType -in @("Error", "Warning"))
+    {
+        Write-Warning -Message ($EntryMessage -f $EntryArguments)
     }
 }
 
@@ -927,7 +965,7 @@ function Test-DscMofConfig
         {
             $updateResource.Exception = $_.Exception.Message
             $updateResource.InDesiredState = $false
-            Write-Error -Exception $_.Exception -Message $_.Exception.Message
+            Write-EventLogEntry -EntryMessage "$(`$LocalizedData.ExternalFunctionError)" -EntryArguments @($updateResource.ResourceId, "Test", $_.Exception.Message) -EntryType Error
         }
        
         $output += $result
@@ -1027,6 +1065,7 @@ function Assert-DscMofConfig
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+    Write-EventLogEntry -EntryMessage "Starting Portable LCM at {0}" -EntryArguments (Get-TimeStamp)
     New-Variable -Name 'DSCMachineStatus ' -Scope 'Global' -Value 0 -Force
     $lcm = Get-LcmConfig
     if ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId -and -not $Force))
@@ -1144,7 +1183,7 @@ function Assert-DscMofConfig
                 $updateResource.Exception = $_.Exception.Message
                 $updateResource.InDesiredState = $false
 
-                Write-Error -Exception $_.Exception -Message $_.Exception.Message
+                Write-EventLogEntry -EntryMessage "$($LocalizedData.ExternalFunctionError)" -EntryArguments @($updateResource.ResourceId,"Test", $_.Exception.Message) -EntryType Error
                 continue
             }
 
@@ -1187,6 +1226,7 @@ function Assert-DscMofConfig
     {
         Reset-Lcm
     }
+    Write-EventLogEntry -EntryMessage "Finishing Portable LCM at {0}" -EntryArguments (Get-TimeStamp)
 }
 
 function Get-LcmConfig
@@ -1319,12 +1359,16 @@ function Get-DscMofStatus
         {
             if (-not $Full)
             {
-                $properties = [ordered]@{
-                    Name           = $configuration.Resources.MofFile | Select-Object -First 1
-                    InDesiredState = ($configuration.Resources.InDesiredState -notcontains $false)
-                }
+                foreach ($resource in $configuration.Resources)
+                {
+                    $properties = [ordered]@{
+                        Name           = $resource.ResourceId
+                        InDesiredState = $resource.InDesiredState
+                        LastError      = $resource.Exception
+                    }
 
-                $overallStatus += New-Object -TypeName 'PSObject' -Property $properties
+                    $overallStatus += New-Object -TypeName 'PSObject' -Property $properties
+                }                
             }
             else
             {
@@ -1434,7 +1478,7 @@ function Publish-DscMofConfig
 
     foreach ($mofFile in $mofFiles)
     {
-        $hash = (Get-FileHash -Path $mofFile -Algorithm 'MD5').Hash
+        $hash = (Get-FileHash -Path $mofFile -Algorithm 'SHA512').Hash
         $mofFileName = [System.IO.Path]::GetFileName($mofFile)
         $mofName = [System.IO.Path]::GetFileNameWithoutExtension($mofFile)
         $mofCopyPath = Join-Path -Path (Split-Path -Path $MofConfigPath -Parent) -ChildPath $mofFileName
@@ -1454,13 +1498,28 @@ function Publish-DscMofConfig
         if (Test-Path -Path $mofCopyPath)
         {
             $mofCopyExists = $true
-            $mofCopyHash = (Get-FileHash -Path $mofCopyPath -Algorithm 'MD5').Hash
+            $mofCopyHash = (Get-FileHash -Path $mofCopyPath -Algorithm 'SHA512').Hash
         }
 
         # MOF exists in config and matches all current values - skip it
-        if ($existingConfig.Count -gt 0 -and $existingConfig.Hash -eq $hash -and $mofCopyExists -and $mofCopyHash -eq $hash -and $existingConfig.Mode -eq $Mode)
+        if ((-not $null -eq $existingConfig) -and 
+            $existingConfig.Hash -eq $hash -and 
+            $mofCopyExists -and 
+            $mofCopyHash -eq $hash -and
+            $existingConfig.Mode -eq $Mode)
         {
             Write-Verbose -Message ($LocalizedData.MofExists -f $mofName, $hash)
+            continue
+        }
+        # MOF exists in config but is a different mode
+        elseif ((-not $null -eq $existingConfig) -and 
+            $existingConfig.Hash -eq $hash -and 
+            $mofCopyExists -and 
+            $mofCopyHash -eq $hash -and
+            $existingConfig.Mode -ne $Mode
+        )
+        {
+            $existingConfig.mode = $Mode
             continue
         }
 
