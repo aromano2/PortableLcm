@@ -1359,12 +1359,16 @@ function Get-DscMofStatus
         {
             if (-not $Full)
             {
-                $properties = [ordered]@{
-                    Name           = $configuration.Resources.MofFile | Select-Object -First 1
-                    InDesiredState = ($configuration.Resources.InDesiredState -notcontains $false)
-                }
+                foreach ($resource in $configuration.Resources)
+                {
+                    $properties = [ordered]@{
+                        Name           = $resource.ResourceId
+                        InDesiredState = $resource.InDesiredState
+                        LastError      = $resource.Exception
+                    }
 
-                $overallStatus += New-Object -TypeName 'PSObject' -Property $properties
+                    $overallStatus += New-Object -TypeName 'PSObject' -Property $properties
+                }                
             }
             else
             {
@@ -1474,7 +1478,7 @@ function Publish-DscMofConfig
 
     foreach ($mofFile in $mofFiles)
     {
-        $hash = (Get-FileHash -Path $mofFile -Algorithm 'MD5').Hash
+        $hash = (Get-FileHash -Path $mofFile -Algorithm 'SHA512').Hash
         $mofFileName = [System.IO.Path]::GetFileName($mofFile)
         $mofName = [System.IO.Path]::GetFileNameWithoutExtension($mofFile)
         $mofCopyPath = Join-Path -Path (Split-Path -Path $MofConfigPath -Parent) -ChildPath $mofFileName
@@ -1494,13 +1498,28 @@ function Publish-DscMofConfig
         if (Test-Path -Path $mofCopyPath)
         {
             $mofCopyExists = $true
-            $mofCopyHash = (Get-FileHash -Path $mofCopyPath -Algorithm 'MD5').Hash
+            $mofCopyHash = (Get-FileHash -Path $mofCopyPath -Algorithm 'SHA512').Hash
         }
 
         # MOF exists in config and matches all current values - skip it
-        if ($existingConfig.Count -gt 0 -and $existingConfig.Hash -eq $hash -and $mofCopyExists -and $mofCopyHash -eq $hash -and $existingConfig.Mode -eq $Mode)
+        if ((-not $null -eq $existingConfig) -and 
+            $existingConfig.Hash -eq $hash -and 
+            $mofCopyExists -and 
+            $mofCopyHash -eq $hash -and
+            $existingConfig.Mode -eq $Mode)
         {
             Write-Verbose -Message ($LocalizedData.MofExists -f $mofName, $hash)
+            continue
+        }
+        # MOF exists in config but is a different mode
+        elseif ((-not $null -eq $existingConfig) -and 
+            $existingConfig.Hash -eq $hash -and 
+            $mofCopyExists -and 
+            $mofCopyHash -eq $hash -and
+            $existingConfig.Mode -ne $Mode
+        )
+        {
+            $existingConfig.mode = $Mode
             continue
         }
 
