@@ -37,6 +37,7 @@ jobs:
         uses: gittools/actions/gitversion/execute@v0
         with:
           useConfigFile: true
+          configFilePath: GitVersion.yml
       - name: Show GitVersion
         run: |
           Write-Output ${{ steps.gitversion.outputs }}
