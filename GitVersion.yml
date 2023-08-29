@@ -1,26 +1,18 @@
 mode: Mainline
-major-version-bump-message: '\+major'
-minor-version-bump-message: '\+f'
-patch-version-bump-message: '\+b'
-
+next-version: 0.0.3
 branches:
   main:
     regex: ^main$
     mode: ContinuousDelivery
     tag: ''
-    increment: Minor
+    increment: Patch
     prevent-increment-of-merged-branch-version: true
-    track-merge-target: false
-    source-branches: [ 'develop', 'release' ]
     tracks-release-branches: false
-    is-release-branch: false
+    is-release-branch: true
     is-mainline: true
     pre-release-weight: 55000
   develop:
     regex: ^dev(elop)?(ment)?$
     mode: ContinuousDeployment
     tag: preview
-    increment: Patch
-    is-develop: true
-
 merge-message-formats: {}
