@@ -1,6 +1,18 @@
 mode: Mainline
+next-version: 0.0.3
 branches:
-  master:
-    regex: ^latest$
-  pull-request:
-    tag: pr
+  main:
+    regex: ^main$
+    mode: ContinuousDelivery
+    tag: ''
+    increment: Patch
+    prevent-increment-of-merged-branch-version: true
+    tracks-release-branches: false
+    is-release-branch: true
+    is-mainline: true
+    pre-release-weight: 55000
+  develop:
+    regex: ^dev(elop)?(ment)?$
+    mode: ContinuousDeployment
+    tag: preview
+merge-message-formats: {}
