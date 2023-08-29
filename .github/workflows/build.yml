@@ -26,6 +26,8 @@ jobs:
   git-version:
     runs-on: windows-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v2  
       - name: Install-GitVersion
         uses: gittools/actions/gitversion/setup@v0
         with:
