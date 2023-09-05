@@ -12,7 +12,7 @@
 RootModule = 'PortableLcm.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.0.0.1'
+ModuleVersion = '0.0.3'
 
 # ID used to uniquely identify this module
 GUID = 'fa9cb268-0609-4c74-8fba-aa5a169c081e'
@@ -48,7 +48,8 @@ PowerShellVersion = '5.1'
 # ProcessorArchitecture = ''
 
 # Modules that must be imported into the global environment prior to importing this module
-RequiredModules = @(@{ModuleName = 'PSDesiredStateConfiguration'; ModuleVersion = '1.1'; })
+RequiredModules = @(@{ModuleName = 'PSDesiredStateConfiguration'; ModuleVersion = '1.1'; }
+@{ModuleName = 'PSSQLite'; ModuleVersion = '1.1.0'; })
 
 # Assemblies that must be loaded prior to importing this module
 # RequiredAssemblies = @()
