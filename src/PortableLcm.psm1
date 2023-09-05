@@ -1,46 +1,105 @@
+#requires -modules PSSQLite
+using namespace System.Management.Automation
+
 data LocalizedData
 {
     # culture="en-US"
     ConvertFrom-StringData -StringData @'
-    ContainerDetected = Folder detected for path '{0}'.
-    FoundInstances = Found {0} resources in file {1}.
-    ModulePresent = Module '{0}' with version '{1}' is present.
-    InstallModule = Installing module '{0}' version '{1}' to scope '{2}'.
-    MandatoryParameter = Parameter '{0}' is mandatory.
-    ModuleNotPresent = Module '{0}-{1}' not present. Skipping resource '{2}'.
-    ParametersValidated = Parameters for resource '{0}' passed validation.
-    ResourceValidated = Resource '{0}' passed validation.
     CallExternalFunction = Calling {0}-TargetResource for resource '{1}'.
-    ExternalFunctionError = Resource: {0}\n{1} Error: {2}.
-    ParametersNotValidated = Parameters for resource '{0}' failed validation.
-    ResourceNotInDesiredState = Resource '{0}' is not in desired state.
-    ResourceInDesiredState = Resource '{0}' is in desired state.
-    TestException = Exception thrown: {0}.
-    MonitorOnlyResource = Resource '{0}' is set to monitor only. Set will be skipped.
-    MofDoesNotExist = Publishing new MOF config '{0}' with hash '{1}'.
-    HashMismatch = Hash mismatch for MOF '{0}'. Current hash: '{1}'. New hash: '{2}'. Overwriting existing configuration.
-    ModeMismatch = Mode mismatch for MOF '{0}'. Current mode: '{1}'. New mode: '{2}'. Overwriting existing configuration.
-    MofExists = MOF '{0}' with hash '{1}' already exists. Skipping.
+    ContainerDetected = Folder detected for path '{0}'.
+    CopyMof = Copying '{0}' to {1}'.
+    CredentialNotSupported = Credential property detected in resource '{0}'. Credentials are currently not supported. Skipping.
     DependencyDesiredState = Resource '{0}' dependency '{1}' is in desired state.
     DependencyNotInDesiredState = Resource '{0}' dependency '{1}' is not in desired state, skipping.
-    DependencySet = Resource '{0}' dependency '{1}' has been set.
     DependencyNotSet = Resource '{0}' dependency '{1}' has not been set, skipping.
-    CopyMof = Copying '{0}' to {1}'.
-    RebootRequiredNotAllowed = A reboot is required to finish applying configuration but reboots are not allowed. 
-    RebootNotRequired = A reboot is not required.
-    Reboot = Rebooting to finish applying configuration.
-    CredentialNotSupported = Credential property detected in resource '{0}'. Credentials are currently not supported. Skipping.
+    DependencySet = Resource '{0}' dependency '{1}' has been set.
+    ExternalFunctionError = Resource: {0}\n{1} Error: {2}.
+    ForcedStop = Forcing compliance check in process {0} to end.
+    FoundInstancesFromFile = Found {0} resources in file {1}.
+    FoundInstancesFromDB = Found {0} resources in LCM DB.
+    HashMatchesActiveOverLimit = More than one active MOF matching the hash '{0}' has been found. Potential issue in database.
+    HashMismatch = Hash mismatch for MOF '{0}'. Current hash: '{1}'. New hash: '{2}'. Overwriting existing configuration.
+    InstallModule = Installing module '{0}' version '{1}' to scope '{2}'.
+    JobAdded = "Created new job '{0}' in {1} mode for MOF '{2}' (Id: {3}; Resources: {4})"
     LcmBusy = A compliance check is already in progress in process '{0}'.
-    StopWait = Waiting '{0}' seconds before shutting down.
+    MandatoryParameter = Parameter '{0}' is mandatory.
     MissingProcessId = Unable to stop lcm process. Process ID is missing from the configuration.
+    ModeMismatch = Mode mismatch for MOF '{0}'. Current mode: '{1}'. New mode: '{2}'. Overwriting existing configuration.
+    ModulePresent = Module '{0}' with version '{1}' is present.
+    ModuleNotPresent = Module '{0}-{1}' not present. Skipping resource '{2}'.
+    MofDoesNotExist = Publishing new MOF config '{0}' with hash '{1}'.
+    MofExists = MOF '{0}' with hash '{1}' already exists. Skipping.
+    MonitorOnlyResource = Resource '{0}' is set to monitor only. Set will be skipped.
+    NameMatchesActiveOverLimit = More than one active MOF matching the name '{0}' has been found. Potential issue in database. Manually deactive MOFs using Remove-DscMofConfig.
+    NameMatchWillBeDeactivated = The MOF matching the name '{0}' will be deactivated.\r\n\tTarget Mof Hash is '{1}'.
+    NameMatchesAlreadyDeactivated = All MOFs matching the name '{0}' have already been deactivated.
+    ParametersValidated = Parameters for resource '{0}' passed validation.
+    ParametersNotValidated = Parameters for resource '{0}' failed validation.
+    Reboot = Rebooting to finish applying configuration.
+    RebootNotRequired = A reboot is not required.
+    RebootRequiredNotAllowed = A reboot is required to finish applying configuration but reboots are not allowed.
+    ResourceInDesiredState = Resource '{0}' is in desired state.
+    ResourceValidated = Resource '{0}' passed validation.
+    ResourceNotInDesiredState = Resource '{0}' is not in desired state.
+    StopWait = Waiting '{0}' seconds before shutting down.
+    TestException = Exception thrown: {0}.
+'@
+}
+
+data SqlQuery
+{
+    ConvertFrom-StringData @'
+    GetActiveMofByHash = SELECT * FROM Mofs WHERE Hash='{0}' AND Active=1
+    GetMofById = SELECT * FROM MOFs WHERE ID='{0}'
+    GetAllMofs = SELECT * FROM Mofs
+    GetAllActiveMofs = SELECT * FROM Mofs WHERE Active=1
+    AddMof = INSERT INTO Mofs (Hash, Name, Mode) VALUES('{0}', '{1}', '{2}') RETURNING *
+    ModifyMofMode = UPDATE Mofs SET Mode='{0}' WHERE ID='{1}' RETURNING *
+    ModifyMofName = UPDATE Mofs SET Name='{0}' WHERE ID='{1}' RETURNING *
+    DeactivateMof = UPDATE Mofs SET Active='0' WHERE ID='{0}' RETURNING *
+    AddCimInstance = INSERT INTO CimInstances (ResourceId, Mof, Type, ModuleName, ModuleVersion, DependsOn, RawInstance) VALUES('{0}', '{1}', '{2}', '{3}', '{4}', '{5}', '{6}') RETURNING *
+    GetAllCimInstancesFromMof = SELECT * FROM CimInstances WHERE Mof='{0}'
+    GetCimInstance = SELECT RawInstance FROM CimInstances WHERE Mof='{0}' AND ResourceId='{1}'
+    AddJob = INSERT INTO Jobs (Mof, Mode) VALUES('{0}', '{1}') RETURNING *
+    FinishJob = UPDATE Jobs SET EndDate=(datetime('now')) WHERE ID='{0}' RETURNING *
+    GetLastJobByMof = SELECT * FROM Jobs WHERE Mof='{0}' ORDER BY StartDate DESC LIMIT 1
+    AddResult = INSERT INTO Results (Job, CimInstance, InDesiredState, Error, RunType) VALUES(@Job, @CimInstance, @InDesiredState, @Error, @RunType) RETURNING ID
+    GetResultsForJob = SELECT Results.Job, CimInstances.*, Results.Error, coalesce(Results.InDesiredState,0) AS InDesiredState FROM CimInstances LEFT JOIN Results ON CimInstances.Id=Results.CimInstance AND Results.Job='{0}' WHERE CimInstances.MOF='{1}' ORDER BY 5 DESC, 1 DESC, 3
+'@
+}
+
+data RunType
+{
+    ConvertFrom-StringData @'
+    Test = 1
+    Set = 2
+'@
+}
+
+data LcmMode
+{
+    ConvertFrom-StringData @'
+    ApplyAndMonitor = ApplyAndMonitor
+    ApplyAndAutoCorrect = ApplyAndAutoCorrect
+'@
+}
+
+data ResourceState
+{
+    ConvertFrom-StringData @'
+    NotInDesiredState = 0
+    InDesiredState = 1
 '@
 }
 
 function Initialize-Lcm
 {
-    $configParentPath = Join-Path -Path $env:ProgramData -ChildPath 'PortableLcm'
+    $osProgramData = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::CommonApplicationData)
+    $configParentPath = Join-Path -Path $osProgramData -ChildPath 'PortableLcm'
     $configPath = Join-Path -Path $configParentPath -ChildPath 'config.json'
+    $dbPath = Join-Path -Path $configParentPath -ChildPath 'config.sqlite'
     New-Variable -Name 'MofConfigPath' -Option 'ReadOnly' -Scope 'Global' -Value $configPath -Force
+    New-Variable -Name 'MofDBPath' -Option 'ReadOnly' -Scope 'Global' -Value $dbPath -Force
 
     if (-not (Test-Path -Path $configPath))
     {
@@ -51,16 +110,18 @@ function Initialize-Lcm
 
         $config = [ordered]@{
             Settings = @{
-                AllowReboot           = $true
-                Status                = 'Idle'
-                ProcessId             = $null
-                Cancel                = $false
+                AllowReboot            = $true
+                Status                 = 'Idle'
+                ProcessId              = $null
+                Cancel                 = $false
                 CancelTimeoutInSeconds = 300
+                PurgeHistoryAfter_Days = 14
+                ProgressID             = 100
             }
-            Configurations = @()
         }
 
-        $config | ConvertTo-Json | Out-File -FilePath $configPath
+        Set-LcmConfig -Configuration $config
+        Assert-MofDBConnection
     }
 }
 
@@ -80,23 +141,23 @@ class Resource
 
     Resource([string]$ResourceId, [string]$Type, [String]$ModuleName, [String]$ModuleVersion, [string]$Mode, [string]$DependsOn)
     {
-        $this.ResourceId     = $ResourceId
-        $this.Type           = $Type
-        $this.ModuleName     = $ModuleName
-        $this.ModuleVersion  = $ModuleVersion
-        $this.Mode           = $Mode
-        $this.DependsOn      = $DependsOn
+        $this.ResourceId = $ResourceId
+        $this.Type = $Type
+        $this.ModuleName = $ModuleName
+        $this.ModuleVersion = $ModuleVersion
+        $this.Mode = $Mode
+        $this.DependsOn = $DependsOn
     }
 
     Resource([string]$ResourceId, [string]$Type, [String]$ModuleName, [String]$ModuleVersion, [string]$Mode, [string]$DependsOn, [hashtable]$Properties)
     {
-        $this.ResourceId     = $ResourceId
-        $this.Type           = $Type
-        $this.ModuleName     = $ModuleName
-        $this.ModuleVersion  = $ModuleVersion
-        $this.Mode           = $Mode
-        $this.DependsOn      = $DependsOn
-        $this.Properties     = $Properties
+        $this.ResourceId = $ResourceId
+        $this.Type = $Type
+        $this.ModuleName = $ModuleName
+        $this.ModuleVersion = $ModuleVersion
+        $this.Mode = $Mode
+        $this.DependsOn = $DependsOn
+        $this.Properties = $Properties
     }
 }
 
@@ -104,6 +165,63 @@ class Resource
 function Get-TimeStamp
 {
     return Get-Date -Format 'MM/dd/yy hh:mm:ss'
+}
+
+<#
+    .SYNOPSIS
+        Creates a dependency graph for a MOF
+
+    .PARAMETER CimInstanceRows
+        An array of CimInstances from the DB
+#>
+function New-DependencyGraph
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [array]
+        $CimInstanceRows
+    )
+
+    $graph = @{}
+    foreach ($instance in $CimInstanceRows)
+    {
+        $graph[$instance.ResourceId] = $instance.DependsOn
+    }
+
+    return $graph
+}
+
+function Confirm-InstanceDependencies
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [psobject]
+        $Instance,
+
+        [Parameter(Mandatory = $true)]
+        [string]
+        $CurrentJob
+    )
+
+    #Get results of all instances from this run
+    $jobResults = Invoke-Query -Query $SqlQuery.GetResultsForJob -QueryValues $CurrentJob, $Instance.Mof
+    foreach ($dependency in $Instance.DependsOn)
+    {
+        $dependencyResult = $jobResults.Where({ $_.ResourceId -eq $dependency })
+        $messageArgs = @($Instance.ResourceId, $dependency)
+        if ($dependencyResult.InDesiredState -eq $ResourceState.InDesiredState)
+        {
+            Write-Verbose -Message ($LocalizedData.DependencyInDesiredState -f $messageArgs)
+            return $true
+        }
+        else
+        {
+            Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $messageArgs)
+            return $false
+        }
+    }
 }
 
 <#
@@ -144,14 +262,14 @@ function Convert-MofInstance
     param
     (
         [Parameter(Mandatory = $true)]
-        [Microsoft.Management.Infrastructure.CimInstance]
+        [Object]
         $Instance,
 
         [Parameter()]
         [ValidateSet('ApplyAndAutoCorrect', 'ApplyAndMonitor')]
         [string]
         $Mode = 'ApplyAndAutoCorrect',
-        
+
         [Parameter()]
         [switch]
         $IncludeProperties
@@ -187,38 +305,18 @@ function Get-MofInstanceProperties
     param
     (
         [Parameter(Mandatory = $true)]
-        [Microsoft.Management.Infrastructure.CimInstance]
+        [Object]
         $Instance
     )
 
     $filterProperties = @('ConfigurationName', 'ModuleName', 'ModuleVersion', 'SourceInfo', 'ResourceID', 'PSComputerName')
-    $properties = $Instance.CimInstanceProperties.Where({$filterProperties -notcontains $_.Name})
-    
+    $properties = ($Instance | Get-Member -MemberType Property).Where({ $filterProperties -notcontains $_.Name })
+
     $propertyTable = @{}
     foreach ($property in $properties)
     {
-        $type = $property.CimType.ToString()
-        if ($type -notlike '*Array')
-        {
-            if ($type -eq 'SInt64')
-            {
-                $type = 'Long'
-            }
-            elseif ($type -eq 'Instance')
-            {
-                $typeName = ($property.Value | Get-Member).TypeName
-                if ($typeName -contains 'Microsoft.Management.Infrastructure.CimInstance#MSFT_Credential')
-                {
-                    throw ($LocalizedData.CredentialNotSupported -f $Instance.ResourceId)
-                }
-            }
+        $propertyTable[$($property.Name)] = $Instance.$($property.Name)
 
-            $propertyTable[$($property.Name)] = ($property.Value -as ([type]$type))
-        }
-        else
-        {
-            $propertyTable[$($property.Name)] = @($property.Value)
-        }      
     }
 
     return $propertyTable
@@ -270,14 +368,14 @@ function Test-MandatoryParameter
         if ($ignoreResourceParameters -notcontains $key)
         {
             $metadata = $command.Parameters.$($name)
-            if ($($metadata.Attributes | Where-Object {$_.TypeId.Name -eq 'ParameterAttribute'}).Mandatory -and -not $Values.$($key))
+            if ($($metadata.Attributes | Where-Object { $_.TypeId.Name -eq 'ParameterAttribute' }).Mandatory -and -not $Values.$($key))
             {
                 Write-Warning -Message ($LocalizedData.MandatoryParameter -f $key)
                 $hasErrors = $true
             }
         }
     }
-    
+
     return (-not $hasErrors)
 }
 
@@ -309,7 +407,7 @@ function Test-ModulePresent
         $ModuleVersion
     )
 
-    $moduleMatches = Get-Module -Name $ModuleName -ListAvailable -Verbose:$false | Select-Object @{Name='Version'; Expression = {$_.Version.ToString()}}
+    $moduleMatches = Get-Module -Name $ModuleName -ListAvailable -Verbose:$false | Select-Object @{Name = 'Version'; Expression = { $_.Version.ToString() } }
     if ($moduleMatches.Version -contains $ModuleVersion)
     {
         Write-Verbose -Message ($LocalizedData.ModulePresent -f $ModuleName, $ModuleVersion)
@@ -395,7 +493,7 @@ function Merge-MofResourceParameter
 
     .PARAMETER Operation
         Which function to get; get, set or test.
-    
+
     .PARAMETER ResourceName
         Name of the DSC resource to retrieve a function from.
 
@@ -432,7 +530,7 @@ function Import-TempFunction
     $tempFunctionName = $functionName.Replace("-", "-$ResourceName")
     try
     {
-        $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({$_.Version -eq $ModuleVersion}) | Select-Object -First 1
+        $dscResource = (Get-DscResource -Module $ModuleName -Name $ResourceName -Verbose:$false).Where({ $_.Version -eq $ModuleVersion }) | Select-Object -First 1
         if (-not (Get-Command -Name $tempFunctionName -ErrorAction 'SilentlyContinue') -and $null -ne $dscResource)
         {
             Import-Module -FullyQualifiedName $dscResource.Path -Function $functionName -Prefix $ResourceName -Verbose:$false
@@ -446,7 +544,7 @@ function Import-TempFunction
     {
         $global:ProgressPreference = $progPref
     }
-        
+
     return @{
         Name = $tempFunctionName
         Path = $dscResource.Path
@@ -494,50 +592,79 @@ function Test-MofResource
 
     try
     {
-        $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Type -Operation 'Test'
-        if (Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Properties)
-        {
-            Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Properties -Verbose:$verboseSetting
-            Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Test', $Resource.Type)
-            try
-            {
-                $result = &"$($tempFunction.Name)" @splatProperties
-            }
-            catch
-            {
-                throw $_.Exception
-            }
+        $result = $false
 
-            if ($result)
+        if ($Resource.ModuleName -eq 'nx' -and $IsLinux)
+        {
+            $pythonScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'exec_dsc.py'
+            $arguments = ConvertTo-Json -InputObject $Resource.Properties -Compress
+            $scriptResult = python $pythonScriptPath $Resource.Type 'Test' $arguments
+            $matches = Select-String -InputObject $scriptResult -Pattern '(?<=Result:)(\d|-\d)'
+            if ($matches.Matches.Count -gt 0)
             {
-                Write-Verbose -Message ($LocalizedData.ResourceInDesiredState -f $Resource.ResourceId)
+                $returnValue = [int]::Parse( $matches.Matches[0].Value)
+                if ($returnValue -ge 0)
+                {
+                    $result = $true
+                }
             }
             else
             {
-                Write-Warning -Message ($LocalizedData.ResourceNotInDesiredState -f $Resource.ResourceId)
+                throw "Unable to determine state of resource."
             }
-
-            return $result
         }
         else
         {
-            Write-Warning -Message ($LocalizedData.ParametersNotValidated -f $Resource.ResourceId)
+            $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Type -Operation 'Test'
+            if (Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Properties)
+            {
+                Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
+                $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Properties -Verbose:$verboseSetting
+                Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Test', $Resource.Type)
+                try
+                {
+                    # Import the DSC Resource globally for nested functions
+                    $dscResource = Import-Module -FullyQualifiedName $tempFunction.Path -Global -PassThru -Verbose:$false
+                    $result = &"$($tempFunction.Name)" @splatProperties
+                }
+                catch
+                {
+                    #Write-Error -Exception $_.Exception -Message $_.Exception.Message
+                    throw $_.Exception
+                }
+            }
+            else
+            {
+                Write-Warning -Message ($LocalizedData.ParametersNotValidated -f $Resource.ResourceId)
+            }
+
+            try
+            {
+                $dscResource | Remove-Module -Force -Verbose:$false
+            }
+            catch
+            {
+                Write-Verbose -Message "Unable to remove module for $($dscResource.Name)"
+            }
+            
+        }
+
+        if ($result)
+        {
+            Write-Verbose -Message ($LocalizedData.ResourceInDesiredState -f $Resource.ResourceId)
+            return $ResourceState.InDesiredState
+        }
+        else
+        {
+            Write-Warning -Message ($LocalizedData.ResourceNotInDesiredState -f $Resource.ResourceId)
+            return $ResourceState.NotInDesiredState
         }
     }
     catch
     {
         throw $_.Exception
+        return $ResourceState.NotInDesiredState
     }
-    finally
-    {
-        if ($null -ne $tempFunction -and $tempFunction.ContainsKey('Path') -and $null -ne $tempFunction.Path)
-        {
-            #Remove-Module -FullyQualifiedName $tempFunction.Path
-        }
-    }
-
-    return $Resource
 }
 
 <#
@@ -577,46 +704,87 @@ function Set-MofResource
     )
 
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
-    
+
     try
     {
-        $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Type -Operation 'Set'
-        if(Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Properties)
+        if ($Resource.ModuleName -eq 'nx' -and $IsLinux)
         {
-            Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
-            $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Properties -Verbose:$verboseSetting
-            Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set',$Resource.Type)
+            $pythonScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'exec_dsc.py'
+            $arguments = ConvertTo-Json -InputObject $Resource.Properties -Compress
 
-            try
-            {
-                $Resource.LastSet = Get-TimeStamp
-                &"$($tempFunction.Name)" @splatProperties
-                $Resource.InDesiredState = $true
-            }
-            catch
-            {
-                $Resource.Exception = $_.Exception
-                throw $_.Exception
-            }
+            $Resource.LastSet = Get-TimeStamp
+            $result = python $pythonScriptPath $Resource.Type 'Set' $arguments
 
-            return $Resource
+            $matches = Select-String -InputObject $result -Pattern '(?<=Result:)(\d|-\d)'
+            if ($matches.Matches.Count -gt 0)
+            {
+                $returnValue = [int]::Parse( $matches.Matches[0].Value)
+                if ($returnValue -ge 0)
+                {
+                    $result = $true
+                }
+                else
+                {
+                    $result = $false
+                }
+            }
+            else
+            {
+                Write-Warning -Message ($LocalizedData.ParametersNotValidated -f $Resource.ResourceId)
+                $result = $false
+            }
         }
         else
         {
-            Write-Warning -Message ($LocalizedData.ParametersNotValidated -f $Resource.ResourceId)
-            return
+            $tempFunction = Import-TempFunction -ModuleName $Resource.ModuleName -ModuleVersion $Resource.ModuleVersion -ResourceName $Resource.Type -Operation 'Set'
+            if (Test-MandatoryParameter -Name $tempFunction.Name -Values $Resource.Properties)
+            {
+                Write-Verbose -Message ($LocalizedData.ParametersValidated -f $Resource.ResourceId)
+                $splatProperties = Merge-MofResourceParameter -Name $tempFunction.Name -Values $Resource.Properties -Verbose:$verboseSetting
+                Write-Verbose -Message ($LocalizedData.CallExternalFunction -f 'Set', $Resource.Type)
+
+                try
+                {
+                    # Import the DSC Resource globally for nested functions
+                    $dscResource = Import-Module -FullyQualifiedName $tempFunction.Path -Global -PassThru -Verbose:$false
+                    &"$($tempFunction.Name)" @splatProperties | Out-Null
+                    $result = $true
+                }
+                catch
+                {
+                    throw $_.Exception
+                }
+            }
+            else
+            {
+                Write-Warning -Message ($LocalizedData.ParametersNotValidated -f $Resource.ResourceId)
+                $result = $false
+            }
+
+            try
+            {
+                $dscResource | Remove-Module -Force -Verbose:$false
+            }
+            catch
+            {
+                Write-Verbose -Message "Unable to remove module for $($dscResource.Name)"
+            }
+        }
+
+        if ($result)
+        {
+            Write-Verbose -Message ($LocalizedData.ResourceInDesiredState -f $Resource.ResourceId)
+            return $ResourceState.InDesiredState
+        }
+        else
+        {
+            Write-Warning -Message ($LocalizedData.ResourceNotInDesiredState -f $Resource.ResourceId)
+            return $ResourceState.NotInDesiredState
         }
     }
     catch
     {
         throw $_.Exception
-    }
-    finally
-    {
-        if ($null -ne $tempFunction -and $tempFunction.ContainsKey('Path') -and $null -ne $tempFunction.Path)
-        {
-            #Remove-Module -FullyQualifiedName $tempFunction.Path
-        }
     }
 }
 
@@ -640,11 +808,11 @@ function Write-EventLogEntry
     if ($env:OS -eq 'Windows_NT' -and $PSEdition -eq 'Desktop')
     {
         $eventParams = @{
-            Category = 8 # Pipeline Execution Details
-            EventId = 1000
-            LogName = "Windows PowerShell"
-            Source = "PowerShell"
-            Message = ($EntryMessage -f $EntryArguments)
+            Category  = 8 # Pipeline Execution Details
+            EventId   = 1000
+            LogName   = "Windows PowerShell"
+            Source    = "PowerShell"
+            Message   = ($EntryMessage -f $EntryArguments)
             EntryType = $EntryType
         }
         Write-EventLog @eventParams
@@ -658,16 +826,13 @@ function Write-EventLogEntry
 
 <#
     .SYNOPSIS
-        Converts resources from MOF file into a JSON file.
+        Imports CIM Instances from MOF and returns a Resource object for each instance.
 
     .PARAMETER MofPath
         Path to the MOF file.
 
     .PARAMETER Mode
         DSC mode to apply to the configuration, either ApplyAndAutoCorrect (default) or ApplyAndMonitor.
-
-    .PARAMETER Force
-        Forces the overwrite of an existing JSON file.
 
     .EXAMPLE
         Import-MofConfig -MofPath C:\test\test.mof -JsonPath c:\test\test.json
@@ -678,11 +843,12 @@ function Import-MofConfig
     param
     (
         [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
-        [ValidateScript({[System.IO.Path]::GetExtension($_) -eq '.mof'})]
+        [ValidateScript({ Test-Path -Path $_ })]
+        [ValidateScript({ [System.IO.Path]::GetExtension($_) -eq '.mof' })]
         [string]
         $Path,
 
+        #TODO: Convert to dynamic param that uses LcmMode.Keys for validation set
         [Parameter()]
         [ValidateSet('ApplyAndAutoCorrect', 'ApplyAndMonitor')]
         [string]
@@ -690,13 +856,95 @@ function Import-MofConfig
     )
 
     $allInstances = Get-MofCimInstances -Path $Path
+
     $output = @()
     foreach ($instance in $allInstances)
     {
         $output += Convert-MofInstance -Instance $instance -Mode $Mode
-    }   
-    
+    }
+
     return $output
+}
+
+function Assert-MofDBConnection
+{
+    if (-not $script:MofDBConnection)
+    {
+        $script:MofDBConnection = New-SqliteConnection -DataSource $MofDBPath
+        try
+        {
+            $tables = Invoke-SqliteQuery -SQLiteConnection $script:MofDBConnection -Query "PRAGMA table_info(MOFs)"
+            if ($null -eq $tables)
+            {
+                $schema = Get-Content -Path (Join-Path -Path $PSScriptRoot -ChildPath "config.sqlite.sql") -Raw
+                Invoke-SqliteQuery -SQLiteConnection $script:MofDBConnection -Query $schema
+            }
+        }
+        catch
+        {
+            $script:MofDBConnection = $null
+            throw $_.Exception
+        }
+    }
+}
+
+function Invoke-Query
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [string]
+        $Query,
+
+        [Parameter()]
+        [string[]]
+        $QueryValues,
+
+        [Parameter()]
+        [hashtable]
+        $SqlParams,
+
+        [Parameter()]
+        [switch]
+        $IgnoreErrors
+    )
+
+    Assert-MofDBConnection
+
+    try
+    {
+        if ($null -eq $SqlParams)
+        {
+            if ($QueryValues.Count -gt 0)
+            {
+                $finalValues = @()
+                foreach ($value in $QueryValues)
+                {
+                    $escaped = $value -replace "'", "''"
+                    $escaped = $escaped -replace "`r", [char]13
+                    $escaped = $escaped -replace "`n", [char]10
+                    $finalValues += $escaped
+                }
+                $inflatedQuery = $Query -f $finalValues
+            }
+            else
+            {
+                $inflatedQuery = $Query
+            }
+            return Invoke-SqliteQuery -SQLiteConnection $script:MofDBConnection -Query $inflatedQuery
+        }
+        else
+        {
+            return Invoke-SqliteQuery -SQLiteConnection $script:MofDBConnection -Query $Query -SqlParameters $SqlParams
+        }
+    }
+    catch
+    {
+        if (-not $IgnoreErrors)
+        {
+            throw $_.Exception
+        }
+    }
 }
 
 <#
@@ -741,7 +989,7 @@ function Invoke-SortDependencyGraph
         $remaining.Remove($leaf)
         foreach ($key in $remaining.Keys)
         {
-            [string]$leafName = $remaining[$key].Where( {$_ -ieq $leaf})
+            [string]$leafName = $remaining[$key].Where( { $_ -ieq $leaf })
             if (-not [string]::IsNullOrEmpty($leafName))
             {
                 $null = $remaining[$key].Remove($leafName)
@@ -769,12 +1017,391 @@ function Get-Leaf
         }
     }
 }
+
+function Disable-ActiveMof
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [object[]]
+        $Mofs,
+
+        [Parameter(Mandatory = $true)]
+        [string]
+        $MofName
+    )
+
+    if ($Mofs.Count -eq 1)
+    {
+        Write-Verbose -Message ($LocalizedData.NameMatchWillBeDeactivated -f $MofName, $Mofs[0].Hash)
+        Invoke-Query -Query $SqlQuery.DeactivateMof -QueryValues $Mofs[0].Id
+        return $true
+    }
+    elseif ($Mofs.Count -eq 0)
+    {
+        Write-Verbose -Message ($LocalizedData.NameMatchesAlreadyDeactivated -f $MofName)
+        return $true
+    }
+    else
+    {
+        Write-Warning -Message ($LocalizedData.NameMatchesActiveOverLimit -f $MofName)
+        return $false
+    }
+}
+
+function Rename-ActiveMof
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [object[]]
+        $Mofs,
+
+        [Parameter(Mandatory = $true)]
+        [string]
+        $MofName
+    )
+
+    if ($Mofs.Count -eq 1)
+    {
+        # Change MOF name in DB to match new file name since the contents (hash) are equal
+        Invoke-Query -Query $SqlQuery.ModifyMofName -QueryValues @($MofName, $Mofs[0].ID)
+        return $true
+    }
+    elseif ($Mofs.Count -eq 0)
+    {
+        #TODO: Write verbose message
+        return $true
+    }
+    else
+    {
+        # Hash is a unique column, we should not ever end up here
+        Write-Error -Message ($LocalizedData.HashMatchesActiveOverLimit -f $Mofs[0].Hash) -Category InvalidData
+    }
+
+}
+
+function Invoke-DscMofJob
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [hashtable]
+        $MofConfiguration,
+
+        [Parameter(Mandatory = $true)]
+        [bool]
+        $VerboseSetting,
+
+        [Parameter()]
+        [switch]
+        $TestOnly,
+
+        [Parameter()]
+        [int]
+        $ProgressID = 100
+    )
+
+    try
+    {
+        $allInstances = @()
+        $output = @()
+        $job = Invoke-Query -Query $SqlQuery.AddJob -QueryValues $MofConfiguration.ID, $MofConfiguration.Mode | Select-Object -First 1
+        Write-Debug -Message ($LocalizedData.JobAdded -f $job.ID,  $MofConfiguration.Mode, $MofConfiguration.Name, $MofConfiguration.ID, $MofConfiguration.Resources.Count)
+        $allInstances += Get-DbCimInstances -MofID $MofConfiguration.ID
+        $graph = New-DependencyGraph -CimInstanceRows $allInstances
+        $sorted = Invoke-SortDependencyGraph -Graph $graph
+
+        $count = 0
+        foreach ($resourceId in $sorted)
+        {
+            $instance = $allInstances.Where({ $_.ResourceId -eq $resourceId }) | Select-Object -First 1
+            $resourceResults = [ordered]@{
+                Job            = [int]$job.Id
+                CimInstance    = $instance.Id
+                InDesiredState = $ResourceState.NotInDesiredState
+                Error          = $null
+                RunType        = $RunType.Test
+            }
+
+            # Test that module is present. If not skip it.
+            if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
+            {
+                Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+                $resourceResults.Error = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
+                Invoke-Query -Query $SqlQuery.AddResult -SqlParams $resourceResults | Out-Null
+                continue
+            }
+
+            $count++
+            Write-Progress -Id $ProgressID -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete (($count / $($allInstances.Count)) * 100)
+
+            # Check for dependencies.
+            if ($null -ne $instance.DependsOn)
+            {
+                if (Confirm-InstanceDependencies -Instance $instance -CurrentJob $job.Id)
+                {
+                    $resourceResults.Error = ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependCheck)
+                    Invoke-Query -Query $SqlQuery.AddResult -SqlParams $resourceResults | Out-Null
+                    break
+                }
+            }
+
+            try
+            {
+                $resource = Convert-MofInstance -Instance $instance.Inflated -Mode $configuration.Mode -IncludeProperties
+            }
+            catch
+            {
+                $resourceResults.Error = $_.Exception.Message
+                Invoke-Query -Query $SqlQuery.AddResult -SqlParams $resourceResults | Out-Null
+                Write-Warning -Message $_.Exception.Message
+                continue
+            }
+
+            # Check for cancellation token
+            $cancel = (Get-LcmConfig -SettingsOnly).Settings.Cancel
+            if ($cancel -eq $true)
+            {
+                break
+            }
+
+            # Test resource
+            try
+            {
+                $result = Test-MofResource -Resource $resource -Verbose:$VerboseSetting
+                $resourceResults.InDesiredState = $result
+
+                # Check for cancellation token
+                $cancel = (Get-LcmConfig -SettingsOnly).Settings.Cancel
+                if ($cancel -eq $true)
+                {
+                    break
+                }
+            }
+            catch
+            {
+                $resourceResults.Error = $_.Exception.Message
+                $resourceResults.InDesiredState = $ResourceState.NotInDesiredState
+                Invoke-Query -Query $SqlQuery.AddResult -SqlParams $resourceResults | Out-Null
+
+                Write-EventLogEntry -EntryMessage "$($LocalizedData.ExternalFunctionError)" -EntryArguments @($resource.ResourceId, "Test", $_.Exception.Message) -EntryType Error
+                continue
+            }
+
+            # Set resource
+            if (-not $TestOnly -and $resource.Mode -eq 'ApplyAndAutoCorrect' -and $result -ne $ResourceState.InDesiredState)
+            {
+                $resourceResults.RunType = $RunType.Set
+                try
+                {
+                    $result = Set-MofResource -Resource $resource -Verbose:$verboseSetting
+                    $resourceResults.InDesiredState = $result
+                    #TODO: Should we test again after setting to validate state?
+
+                    $cancel = (Get-LcmConfig -SettingsOnly).Settings.Cancel
+                    if ($cancel -eq $true)
+                    {
+                        break
+                    }
+                }
+                catch
+                {
+                    $resourceResults.Error = $_.Exception.Message
+                    $resourceResults.InDesiredState = $ResourceState.NotInDesiredState
+                }
+            }
+            Invoke-Query -Query $SqlQuery.AddResult -SqlParams $resourceResults | Out-Null
+            $output += $result
+        }
+
+        Invoke-Query -Query $SqlQuery.FinishJob -QueryValues $job.Id | Out-Null
+    }
+    catch
+    {
+        Write-EventLogEntry -EntryMessage 'Error with LCM Job {0}`r`n{1}' -EntryArguments @($Job.ID, $_.Exception.Message) -EntryType Error
+        throw $_
+    }
+
+    return $output
+}
 #endregion Helpers
 
 #region Public
+<#
+    .SYNOPSIS
+        Returns all CIM instances in a MOF file.
+
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file
+
+    .EXAMPLE
+        Get-MofCimInstances -Path C:\temp\file.mof
+#>
+function Get-MofCimInstances
+{
+    [CmdletBinding()]
+    [OutputType([Microsoft.Management.Infrastructure.CimInstance])]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateScript({ Test-Path -Path $_ })]
+        [string]
+        $Path,
+
+        #TODO: Convert to dynamic param that uses LcmMode.Keys for validation set
+        [Parameter()]
+        [ValidateSet('ApplyAndAutoCorrect', 'ApplyAndMonitor')]
+        [string]
+        $Mode = 'ApplyAndAutoCorrect'
+    )
+
+    if (Test-Path -Path $Path -PathType 'Container')
+    {
+        Write-Verbose -Message ($LocalizedData.ContainerDetected -f $Path)
+        $mofFiles = (Get-ChildItem -Path $Path -Include "*.mof" -Recurse).FullName
+    }
+    else
+    {
+        $mofFiles = $Path
+    }
+
+    try
+    {
+        $instances = @()
+        foreach ($mofFile in $mofFiles)
+        {
+            $mofInstances = ([Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($mofFile, 4)).Where({ -not [string]::IsNullOrEmpty($_.ModuleName) })
+            Write-Verbose -Message $($LocalizedData.FoundInstancesFromFile -f $mofInstances.Count, $mofFile)
+
+            $mofHash = (Get-FileHash -Path $mofFile -Algorithm SHA256).Hash
+            $mofName = Split-Path -Path $mofFile -Leaf
+
+            $mofRow = Invoke-Query -IgnoreErrors -Query $SqlQuery.GetActiveMofByHash -QueryValues $mofHash
+
+            if ($null -eq $mofRow)
+            {
+                $mofRow = Invoke-Query -Query $SqlQuery.AddMof -QueryValues $mofHash, $mofName, $Mode
+            }
+
+            foreach ($instance in $mofInstances)
+            {
+                if ($null -eq (Invoke-Query -IgnoreErrors -Query $SqlQuery.GetCimInstance -QueryValues $mofRow.ID, $instance.ResourceId))
+                {
+                    if ($instance.ResourceID -match '(?<=\[).*?(?=\])')
+                    {
+                        $type = $Matches[0]
+                    }
+
+                    $instanceSerialized = ([PSSerializer]::Serialize($instance, 100)) #-replace ("'", "''")
+
+                    $queryArgs = @(
+                        $instance.ResourceID, $mofRow.ID, $type
+                        $instance.ModuleName, $instance.ModuleVersion
+                        $instance.DependsOn, $instanceSerialized
+                    )
+                    Invoke-Query -Query $SqlQuery.AddCimInstance -QueryValues $queryArgs | Out-Null
+                }
+            }
+
+            $instances += $mofInstances
+        }
+    }
+    catch
+    {
+        throw $_.Exception
+    }
+    finally
+    {
+        [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ClearCache()
+    }
+
+    return $instances
+}
+
+function Get-DbCimInstances
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [int]
+        $MofID
+    )
+
+    Assert-MofDBConnection
+    try
+    {
+        $rawInstances = Invoke-Query -Query $SqlQuery.GetAllCimInstancesFromMof -QueryValues $MofID
+        Write-Verbose -Message $($LocalizedData.FoundInstancesFromDB -f $rawInstances.Count)
+        foreach ($rawInstance in $rawInstances)
+        {
+            if ([string]::IsNullOrEmpty($rawInstance.DependsOn))
+            {
+                $rawInstance.DependsOn = $null
+            }
+            $rawInstance | Add-Member -MemberType NoteProperty -Name Inflated -Value $([PSSerializer]::Deserialize([System.Text.Encoding]::ASCII.GetString($rawInstance.RawInstance)))
+        }
+    }
+    catch
+    {
+        throw $_.Exception
+    }
+    return $rawInstances
+}
 
 
+<#
+    .SYNOPSIS
+        Tests resource states defined in a MOF file or local configuration.
 
+    .PARAMETER Path
+        Path to the folder containing many MOF files or path to a singular MOF file
+
+    .EXAMPLE
+        Test-DscMofConfig -Path C:\temp\file.mof
+#>
+function Test-DscMofConfig
+{
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param
+    (
+        [Parameter()]
+        [switch]
+        $Force
+    )
+
+    $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
+    Write-EventLogEntry -EntryMessage "Starting Portable LCM at {0}" -EntryArguments (Get-TimeStamp)
+    $output = @()
+    $lcm = Get-LcmConfig -ActiveOnly
+    if ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId -and -not $Force))
+    {
+        Write-Warning -Message ($LocalizedData.LcmBusy -f $lcm.Settings.ProcessId)
+        return
+    }
+    elseif ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId) -and $Force)
+    {
+        Write-Verbose -Message ($LocalizedData.ForceStop -f $lcm.Settings.ProcessId)
+        Stop-Lcm -Force
+    }
+    else
+    {
+        $lcm.Settings.Status = 'Busy'
+        $lcm.Settings.ProcessId = $PID
+        Set-LcmConfig -Configuration $lcm
+    }
+
+    foreach ($configuration in $lcm.Configurations)
+    {
+        $output = Invoke-DscMofJob -MofConfiguration $configuration -VerboseSetting $verboseSetting -TestOnly
+    }
+
+    Reset-Lcm
+    Write-Progress -Id $lcm.Settings.ProgressID -Completed -Activity 'Completed'
+    Write-EventLogEntry -EntryMessage "Finishing Portable LCM at {0}" -EntryArguments (Get-TimeStamp)
+    return ($output -notcontains $false)
+}
 
 function Stop-Lcm
 {
@@ -786,7 +1413,7 @@ function Stop-Lcm
         $Force
     )
 
-    $lcm = Get-LcmConfig
+    $lcm = Get-LcmConfig -SettingsOnly
     if ($Force)
     {
         if (-not [string]::IsNullOrEmpty($lcm.Settings.ProcessId))
@@ -803,7 +1430,7 @@ function Stop-Lcm
     else
     {
         $lcm.Settings.Cancel = $true
-        $lcm | ConvertTo-Json -Depth 6 | Out-File $MofConfigPath
+        Set-LcmConfig -Configuration $lcm
 
         if (-not [string]::IsNullOrEmpty($lcm.Settings.CancelTimeoutInSeconds))
         {
@@ -820,7 +1447,7 @@ function Stop-Lcm
                     }
                 }
             }
-            
+
             Stop-Process -Id $lcm.Settings.ProcessId -Force -ErrorAction 'SilentlyContinue'
             Reset-Lcm
         }
@@ -832,12 +1459,12 @@ function Reset-Lcm
     [CmdletBinding()]
     param()
 
-    $lcm = Get-LcmConfig
+    $lcm = Get-LcmConfig -SettingsOnly
     $lcm.Settings.Cancel = $false
     $lcm.Settings.Status = 'Idle'
     $lcm.Settings.ProcessId = $null
 
-    $lcm | ConvertTo-Json -Depth 6 | Out-File $MofConfigPath
+    Set-LcmConfig $lcm
 }
 
 <#
@@ -864,172 +1491,68 @@ function Assert-DscMofConfig
     $verboseSetting = $PSCmdlet.MyInvocation.BoundParameters['Verbose'].IsPresent -and $PSCmdlet.MyInvocation.BoundParameters['Verbose']
     Write-EventLogEntry -EntryMessage "Starting Portable LCM at {0}" -EntryArguments (Get-TimeStamp)
     New-Variable -Name 'DSCMachineStatus ' -Scope 'Global' -Value 0 -Force
-    $lcm = Get-LcmConfig
-    if ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId -and -not $Force))
+    $lcm = Get-LcmConfig -ActiveOnly
+    if ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId) -and -not $Force)
     {
         Write-Warning -Message ($LocalizedData.LcmBusy -f $lcm.Settings.ProcessId)
         return
     }
     elseif ($lcm.Settings.Status -ne 'Idle' -and -not [string]::IsNullOrEmpty($lcm.Settings.ProcessId) -and $Force)
     {
-        Write-Verbose -Message ($LocalizedData.ForceStop)
+        Write-Verbose -Message ($LocalizedData.ForceStop -f $lcm.Settings.ProcessId)
         Stop-Lcm -Force
     }
     else
     {
         $lcm.Settings.Status = 'Busy'
         $lcm.Settings.ProcessId = $PID
-        $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+        Set-LcmConfig -Configuration $lcm
     }
 
-    try
+    foreach ($configuration in $lcm.Configurations)
     {
-        $allInstances = @()
-        $lcmResourcesList = @()
-        foreach($configuration in $lcm.Configurations)
-        {
-            $lcmResourcesList += $configuration.Resources
-            $allInstances += Get-MofCimInstances -Path $configuration.MofPath
-        }    
-
-        $graph = @{}
-        foreach ($mofInstance in $allInstances)
-        {
-            $graph[$mofInstance.ResourceId] = $mofInstance.DependsOn
-        }
-
-        $sorted = Invoke-SortDependencyGraph -Graph $graph
-        $count = 0
-        foreach ($resourceId in $sorted)
-        {
-            $instance = $allInstances.Where({$_.ResourceId -eq $resourceId}) | Select-Object -First 1
-            $updateResource = $lcmResourcesList.Where({$_.ResourceID -eq $resourceId}) | Select-Object -First 1
-            
-            # Test that module is present. If not skip it.
-            if (-not (Test-ModulePresent -ModuleName $instance.ModuleName -ModuleVersion $instance.ModuleVersion))
-            {
-                Write-Warning -Message ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
-                $updateResource.Exception = ($LocalizedData.ModuleNotPresent -f $instance.ModuleName, $instance.ModuleVersion, $instance.ResourceId)
-                continue
-            }
-
-            $count++
-            Write-Progress -Activity "$count of $($allInstances.Count), $(($count/$($allInstances.Count)).ToString('P'))" -Status "$($instance.ResourceId)" -PercentComplete ($count/$($allInstances.Count))
-            
-            # Check for dependencies.
-            $skip = $false 
-            if ($null -ne $instance.DependsOn)
-            {
-                foreach ($dependencyId in $instance.DependsOn)
-                {
-                    $dependencyInstance = $allInstances.Where({$_.ResourceId -eq $dependencyId}) | Select-Object -First 1
-                    $dependencyInDesiredState = $dependencyInstance.InDesiredState
-                    if ($dependencyInDesiredState)
-                    {
-                        Write-Verbose -Message ($LocalizedData.DependencyInDesiredState -f $resourceId, $dependencyId)
-                    }
-                    else
-                    {
-                        $updateResource.Exception = ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
-                        Write-Warning -Message ($LocalizedData.DependencyNotInDesiredState -f $resourceId, $dependencyId)
-                        $skip = $true
-                        break
-                    }
-                }
-            }
-            
-            if ($skip)
-            {
-                continue
-            }
-
-            try
-            {
-                $resource = Convert-MofInstance -Instance $instance -IncludeProperties
-            }
-            catch
-            {
-                $updateResource.Exception = $_.Exception.Message
-                Write-Warning -Message $_.Exception.Message
-                continue
-            }
-
-            # Check for cancellation token
-            $cancel = (Get-LcmConfig).Settings.Cancel
-            if ($cancel -eq $true)
-            {
-                break
-            }
-
-            # Test resource
-            try
-            {
-                $result = Test-MofResource -Resource $resource -Verbose:$verboseSetting
-                $updateResource.LastTest = Get-TimeStamp
-                $updateResource.InDesiredState = $result
-
-                # Check for cancellation token
-                $cancel = (Get-LcmConfig).Settings.Cancel
-                if ($cancel -eq $true)
-                {
-                    break
-                }
-            }
-            catch
-            {
-                $updateResource.Exception = $_.Exception.Message
-                $updateResource.InDesiredState = $false
-
-                Write-EventLogEntry -EntryMessage "$($LocalizedData.ExternalFunctionError)" -EntryArguments @($updateResource.ResourceId,"Test", $_.Exception.Message) -EntryType Error
-                continue
-            }
-
-            # Set resource
-            if($resource.Mode -eq 'ApplyAndAutoCorrect' -and -not $result)
-            {
-                try
-                {
-                    $result = Set-MofResource -Resource $resource -Verbose:$verboseSetting
-                    $updateResource.LastSet = Get-TimeStamp
-                    $updateResource.Exception = ""
-                }
-                catch
-                {
-                    $updateResource.Exception = $_.Exception.Message
-                    $updateResource.InDesiredState = $false
-                }
-            }
-        }
-
-        # Update LCM status
-        $lcm | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
-
-        Write-Progress -Completed -Activity 'Completed'
-        if ($global:DSCMachineStatus -eq 1 -and $lcm.Settings.AllowReboot -eq 'true')
-        {
-            Write-Verbose -Message $LocalizedData.Reboot
-            Restart-Computer -Force -Delay 15
-        }
-        elseif($global:DSCMachineStatus -eq 1)
-        {
-            Write-Warning -Message $LocalizedData.RebootRequiredNotAllowed
-        }
-        else
-        {
-            Write-Verbose -Message $LocalizedData.RebootNotRequired
-        }
+        $result = Invoke-DscMofJob -MofConfiguration $configuration -VerboseSetting $verboseSetting
     }
-    finally
+
+    Write-Progress -Id $lcm.Settings.ProgressID -Completed -Activity 'Completed'
+
+    if ($global:DSCMachineStatus -eq 1 -and $lcm.Settings.AllowReboot -eq 'true')
     {
-        Reset-Lcm
+        Write-Verbose -Message $LocalizedData.Reboot
+        Restart-Computer -Force -Delay 15
     }
+    elseif ($global:DSCMachineStatus -eq 1)
+    {
+        Write-Warning -Message $LocalizedData.RebootRequiredNotAllowed
+    }
+    else
+    {
+        Write-Verbose -Message $LocalizedData.RebootNotRequired
+    }
+
+    Reset-Lcm
     Write-EventLogEntry -EntryMessage "Finishing Portable LCM at {0}" -EntryArguments (Get-TimeStamp)
 }
 
 function Get-LcmConfig
 {
+    param
+    (
+        [Parameter()]
+        [switch]
+        $SettingsOnly,
+
+        [Parameter()]
+        [switch]
+        $ActiveOnly,
+
+        [Parameter()]
+        [switch]
+        $FullStatus
+    )
+    #TODO: Enforce the purge of data older than PurgeHistory
     $config = Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
-    
+
     if (-not (Test-Path -Path $MofConfigPath) -or ($null -eq $config))
     {
         if (-not (Split-Path -Path $MofConfigPath -Parent))
@@ -1039,26 +1562,122 @@ function Get-LcmConfig
 
         $config = [ordered]@{
             Settings = @{
-                AllowReboot           = $true
-                Status                = 'Idle'
-                ProcessId             = $null
-                Cancel                = $false
+                AllowReboot            = $true
+                Status                 = 'Idle'
+                ProcessId              = $null
+                Cancel                 = $false
                 CancelTimeoutInSeconds = 300
+                PurgeHistoryAfter_Days = 14
+                ProgressID             = 100
             }
-            Configurations = @()
         }
 
-        $config | ConvertTo-Json | Out-File -FilePath $configPath
+        Set-LcmConfig -Configuration $config
+        # Get the config back as a PSObject
+        $config = Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
     }
 
-    return Get-Content -Path $MofConfigPath | ConvertFrom-Json -WarningAction 'SilentlyContinue'
+    if (-not $SettingsOnly)
+    {
+        $config | Add-Member -MemberType NoteProperty -Name Configurations -Value @()
+
+        if ($ActiveOnly)
+        {
+            $mofs = Invoke-Query -Query $SqlQuery.GetAllActiveMofs
+        }
+        else
+        {
+            $mofs = Invoke-Query -Query $SqlQuery.GetAllMofs
+        }
+
+        foreach ($mof in $mofs)
+        {
+            if ($ActiveOnly -and -not $mof.Active)
+            {
+                continue
+            }
+
+            $mofConfig = @{
+                Id        = $mof.ID
+                Name      = $mof.Name
+                Hash      = $mof.Hash
+                Mode      = $mof.Mode
+                Active    = $mof.Active
+                Resources = @()
+            }
+
+            if ($FullStatus)
+            {
+                $mofResources = Invoke-Query -Query $SqlQuery.GetAllCimInstancesFromMof -QueryValues $mof.ID
+                $job = Invoke-Query -Query $SqlQuery.GetLastJobByMof -QueryValues $mof.ID
+                if ($null -eq $job -or $job.Count -eq 0)
+                {
+                    foreach ($resource in $mofResources)
+                    {
+                        $resultResource = [Resource]::new(
+                            $resource.ResourceId,
+                            $resource.Type,
+                            $resource.ModuleName,
+                            $resource.ModuleVersion,
+                            $mof.Mode,
+                            "$($resource.DependsOn)"
+                        )
+                        $resultResource.InDesiredState = $false
+                        $mofConfig.Resources += $resultResource
+                        $mofConfig.LastJob = "None"
+                    }
+                }
+                else
+                {
+                    $jobResults = Invoke-Query -Query $SqlQuery.GetResultsForJob -QueryValues $job.ID, $Mof.ID
+                    foreach ($result in $jobResults)
+                    {
+                        $resultResource = [Resource]::new(
+                            $result.ResourceId,
+                            $result.Type,
+                            $result.ModuleName,
+                            $result.ModuleVersion,
+                            $mof.Mode,
+                            "$($result.DependsOn)"
+                        )
+                        $resultResource.InDesiredState = ($result.InDesiredState -eq $ResourceState.InDesiredState)
+                        #TODO: Populate last set/test
+                        #$resultResource.LastSet =
+                        #$resultResource.LastTest =
+                        $resultResource.Exception = $result.Error
+                        $mofConfig.Resources += $resultResource
+                        $mofConfig.LastJob = $job.ID
+                    }
+                }
+            }
+
+            $config.Configurations += $mofConfig
+        }
+    }
+
+    return $config
 }
 
+function Set-LcmConfig
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        $Configuration
+    )
+
+    $settings = @{
+        Settings = $Configuration.Settings
+    }
+    $settings | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+}
+
+# SPIKE: Do we need this function still? Has Disable-ActiveMof taken it's place?
 function Remove-DscMofConfig
 {
     [CmdletBinding()]
     param()
-
+    #TODO: Get by Hash
     DynamicParam
     {
         $configurations = (Get-LcmConfig).Configurations
@@ -1069,7 +1688,7 @@ function Remove-DscMofConfig
         $attributeCollection.Add($attribute)
 
         $validateSet = New-Object System.Management.Automation.ValidateSetAttribute($configurations.Name)
-        $attributeCollection.add($validateSet)
+        $attributeCollection.Add($validateSet)
 
         $param = New-Object System.Management.Automation.RuntimeDefinedParameter('Name', [string], $attributeCollection)
 
@@ -1084,12 +1703,21 @@ function Remove-DscMofConfig
     }
     process
     {
-        $config = Get-LcmConfig
-        $config.Configurations = $config.Configurations.Where({$_.Name -ne $Name})
-        $config | ConvertTo-Json -Depth 6 | Out-File -FilePath $MofConfigPath
+        if ([string]::IsNullOrEmpty($Name))
+        {
+            return
+        }
+
+        $mof = (Invoke-Query -Query -$SqlQuery.GetMofByName -QueryValues $Name).Where({ $_.Active })
+        if ($mof.Count -ne 1)
+        {
+            throw "Found {0} active MOFs, expected 1."
+        }
+
+        return (Invoke-Query -Query $SqlQuery.DeactivateMof -QueryValues $mof.ID)
     }
-    
 }
+
 <#
     .SYNOPSIS
         Retrieves the current state of the current DSC MOF configuration.
@@ -1119,7 +1747,8 @@ function Get-DscMofStatus
         [switch]
         $Full
     )
-
+    #FIXME: Get state from DB
+    #TODO: Get by Hash
     DynamicParam
     {
         $configurations = (Get-LcmConfig).Configurations
@@ -1130,7 +1759,7 @@ function Get-DscMofStatus
         $attributeCollection.Add($attribute)
 
         $validateSet = New-Object System.Management.Automation.ValidateSetAttribute($configurations.Name)
-        $attributeCollection.add($validateSet)
+        $attributeCollection.Add($validateSet)
 
         $param = New-Object System.Management.Automation.RuntimeDefinedParameter('Name', [string], $attributeCollection)
 
@@ -1146,10 +1775,11 @@ function Get-DscMofStatus
     process
     {
         $overallStatus = @()
-        $configurations = (Get-LcmConfig).Configurations
+        $configurations = (Get-LcmConfig -ActiveOnly -FullStatus).Configurations
+
         if ($Name)
         {
-            $configurations = $configurations.Where({$_.Name -eq $Name})
+            $configurations = $configurations.Where({ $_.Name -eq $Name })
         }
 
         foreach ($configuration in $configurations)
@@ -1165,7 +1795,7 @@ function Get-DscMofStatus
                     }
 
                     $overallStatus += New-Object -TypeName 'PSObject' -Property $properties
-                }                
+                }
             }
             else
             {
@@ -1183,7 +1813,7 @@ function Install-DscMofModules
     param
     (
         [Parameter(Mandatory = $true, ParameterSetName = 'ByFile')]
-        [ValidateScript({Test-Path -Path $_})]
+        [ValidateScript({ Test-Path -Path $_ })]
         [string]
         $Path,
 
@@ -1208,13 +1838,13 @@ function Install-DscMofModules
     }
     else
     {
-        $configFiles = (Get-LcmConfig).Configurations.MofPath
+        $configFiles = (Get-LcmConfig -ActiveOnly).Configurations.MofPath
     }
 
     $configResources = @()
     foreach ($configFile in $configFiles)
     {
-        $configResources += Get-MofCimInstances -Path $configFile            
+        $configResources += Get-MofCimInstances -Path $configFile
     }
 
     $moduleGroups = $configResources | Group-Object -Property 'ModuleName', 'ModuleVersion'
@@ -1223,7 +1853,7 @@ function Install-DscMofModules
         $group = $moduleGroup.Group
         $moduleName = $group.ModuleName | Select-Object -First 1
         $moduleVersion = $group.ModuleVersion | Select-Object -First 1
-        if(-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
+        if (-not (Test-ModulePresent -ModuleName $moduleName -ModuleVersion $moduleVersion))
         {
             Write-Verbose -Message $($LocalizedData.InstallModule -f $moduleName, $moduleVersion, $Scope)
             Install-Module -Name $moduleName -RequiredVersion $moduleVersion -Scope $Scope -Verbose:$false -Force
@@ -1250,7 +1880,7 @@ function Publish-DscMofConfig
     param
     (
         [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
+        [ValidateScript({ Test-Path -Path $_ })]
         [string]
         $Path,
 
@@ -1272,74 +1902,67 @@ function Publish-DscMofConfig
     {
         $mofFiles = $Path
     }
+    #TODO: Replace all insert queries with a bulk/transactional query to prevent partial publishing
 
     foreach ($mofFile in $mofFiles)
     {
-        $hash = (Get-FileHash -Path $mofFile -Algorithm 'SHA512').Hash
+        $hash = (Get-FileHash -Path $mofFile -Algorithm 'SHA256').Hash
         $mofFileName = [System.IO.Path]::GetFileName($mofFile)
         $mofName = [System.IO.Path]::GetFileNameWithoutExtension($mofFile)
         $mofCopyPath = Join-Path -Path (Split-Path -Path $MofConfigPath -Parent) -ChildPath $mofFileName
-        $existingConfig = $configurations.Where({$_.Name -eq $mofName -and $_.MofPath -eq $mofCopyPath}) | Select-Object -First 1
 
-        $properties = [ordered]@{
-            Name          = $mofName
-            Hash          = $hash
-            MofPath       = $mofCopyPath
-            Mode          = $Mode
-            ResourceCount = $null
-            Resources     = @()
-        }
+        $nameMatches = $configurations.Where({ $_.Name -eq $mofFileName })
+        $hashMatches = $configurations.Where({ $_.Hash -eq $hash })
 
-        $mofCopyExists = $false
-        $mofCopyHash = $null
-        if (Test-Path -Path $mofCopyPath)
+        if ($nameMatches.Count -gt 0 -and $hashMatches.Count -eq 0)
         {
-            $mofCopyExists = $true
-            $mofCopyHash = (Get-FileHash -Path $mofCopyPath -Algorithm 'SHA512').Hash
+            $activeMatches = @($nameMatches.Where({ $_.Active }))
+            if (-not (Disable-ActiveMof -Mofs $activeMatches -MofName $mofName))
+            {
+                Write-Verbose -Message ($LocalizedData.MofExists -f $mofName, $hash)
+                continue
+            }
         }
-
-        # MOF exists in config and matches all current values - skip it
-        if ((-not $null -eq $existingConfig) -and 
-            $existingConfig.Hash -eq $hash -and 
-            $mofCopyExists -and 
-            $mofCopyHash -eq $hash -and
-            $existingConfig.Mode -eq $Mode)
+        elseif ($nameMatches.Count -eq 0 -and $hashMatches.Count -gt 0)
         {
-            Write-Verbose -Message ($LocalizedData.MofExists -f $mofName, $hash)
+            $activeMatches = @($hashMatches.Where({ $_.Active }))
+            Rename-ActiveMof -Mofs $activeMatches -MofName $mofName
             continue
         }
-        # MOF exists in config but is a different mode
-        elseif ((-not $null -eq $existingConfig) -and 
-            $existingConfig.Hash -eq $hash -and 
-            $mofCopyExists -and 
-            $mofCopyHash -eq $hash -and
-            $existingConfig.Mode -ne $Mode
-        )
+        elseif ($nameMatches.Count -gt 0 -and $hashMatches.Count -gt 0)
         {
-            $existingConfig.mode = $Mode
-            continue
+            $activeNameMatches = $nameMatches.Where({ $_.Active })
+            $activeHashMatches = $hashMatches.Where({ $_.Active })
+
+            $sameMatch = $activeNameMatches.Count -eq 1 -and $activeHashMatches.Count -eq 1
+            $sameMatch = $sameMatch -and $activeNameMatches[0].ID -eq $activeHashMatches[0].ID
+
+            if ($sameMatch)
+            {
+                $match = $activeNameMatches[0]
+                if ($match.Mode -ne $Mode)
+                {
+
+                    Invoke-Query -Query $SqlQuery.ModifyMofMode -QueryValues @($Mode, $match.ID)
+                }
+                else
+                {
+                    Write-Verbose -Message ($LocalizedData.MofExists -f $($mofName, $hash))
+                }
+                continue
+            }
+            else
+            {
+                Disable-ActiveMof -Mofs $activeNameMatches -MofName $mofName
+                Rename-ActiveMof -Mofs $activeHashMatches -MofName $mofName
+            }
         }
 
         Write-Verbose -Message ($LocalizedData.CopyMof -f $Path, $mofCopyPath)
         $null = Copy-Item -Path $mofFiles -Destination $mofCopyPath -Force
-        
-        $mofResources = Import-MofConfig -Path $mofFile -Mode $Mode
-        $properties.ResourceCount = $mofResources.Count
-        $properties.Resources += $mofResources
-        if ($existingConfig.Count -gt 0)
-        {
-            $existingConfig.Hash = $hash
-            $existingConfig.Mode = $Mode
-        }
-        else
-        {
-            $configurations += $properties
-        }
-    }
 
-    $tempConfig = $mofConfig
-    $tempConfig.Configurations = $configurations
-    $tempConfig | ConvertTo-Json -Depth 6 -WarningAction 'SilentlyContinue' | Out-File -FilePath $MofConfigPath
+        $mofResources = Import-MofConfig -Path $mofFile -Mode $Mode
+    }
 }
 
 Initialize-Lcm
